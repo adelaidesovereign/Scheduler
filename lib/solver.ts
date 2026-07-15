@@ -17,13 +17,24 @@ function shiftBounds(staff: Staff[], shiftHours: number): Bounds[] {
   }));
 }
 
+function totalNeeded(cfg: Config): number {
+  let t = 0;
+  for (let d = 0; d < DAYS; d++) for (let s = 0; s < SHIFTS; s++) t += cfg.coverage[d][s];
+  return t;
+}
+
 function validate(cfg: Config): string[] {
   const problems: string[] = [];
   const ids = cfg.staff.map((s) => s.id);
   if (new Set(ids).size !== ids.length) {
     problems.push("Two staff share the same initials. Each id must be unique.");
   }
-  const needed = DAYS * SHIFTS * cfg.staffPerShift;
+  for (let d = 0; d < DAYS; d++) for (let s = 0; s < SHIFTS; s++) {
+    if (cfg.coverage[d][s] > cfg.staff.length) {
+      problems.push("A shift asks for more staff than the roster has.");
+    }
+  }
+  const needed = totalNeeded(cfg);
   const b = shiftBounds(cfg.staff, cfg.shiftLengthHours);
   const maxAvail = b.reduce((a, x) => a + x.maxShifts, 0);
   const minForced = b.reduce((a, x) => a + x.minShifts, 0);
@@ -62,7 +73,6 @@ function leanScore(staff: Staff, s: number): number {
 
 function solveOnce(cfg: Config, bounds: Bounds[], rand: () => number): Solution | null {
   const n = cfg.staff.length;
-  const per = cfg.staffPerShift;
   const assign: boolean[][][] = Array.from({ length: n }, () =>
     Array.from({ length: DAYS }, () => [false, false])
   );
@@ -101,7 +111,7 @@ function solveOnce(cfg: Config, bounds: Bounds[], rand: () => number): Solution 
     for (let s = 0; s < SHIFTS; s++) {
       let have = 0;
       for (let e = 0; e < n; e++) if (assign[e][d][s]) have++;
-      const need = per - have;
+      const need = cfg.coverage[d][s] - have;
       if (need <= 0) continue;
 
       const pool: number[] = [];

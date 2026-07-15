@@ -308,3 +308,45 @@ input:focus, select:focus { outline: 2px solid var(--seal); outline-offset: 1px;
   padding: 10px 12px;
   background: var(--card);
 }
+
+/* Tabs */
+.tabs { display: flex; gap: 8px; margin: 16px 0 0; }
+.tabs button {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 10px 18px;
+  border: 1px solid var(--line);
+  border-bottom: none;
+  background: var(--paper-2);
+  color: var(--ink-soft);
+  cursor: pointer;
+  border-radius: 2px 2px 0 0;
+}
+.tabs button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+/* Coverage grid */
+.covgrid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.covgrid th {
+  font-size: 10px; letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--ink-soft); font-weight: 500; padding: 2px 1px; text-align: center;
+}
+.covgrid th .date { font-size: 9px; color: var(--ink-soft); font-weight: 400; }
+.covgrid td { padding: 2px; }
+.covgrid input { text-align: center; padding: 6px 2px; font-size: 13px; font-weight: 700; }
+.covlabel { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-soft); width: 44px; }
+.covnote { font-size: 11px; color: var(--ink-soft); margin: 10px 0 0; line-height: 1.6; }
+
+/* Ledger page */
+.ledgertable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ledgertable th, .ledgertable td { border-bottom: 1px solid var(--line-soft); padding: 8px 10px; text-align: left; }
+.ledgertable th { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-soft); font-weight: 500; }
+.ledgertable .id { font-weight: 700; }
+.ledgertable .id .sw { width: 8px; height: 14px; border-radius: 2px; display: inline-block; margin-right: 8px; vertical-align: middle; }
+.ot { color: var(--warn); font-weight: 700; }
+.weekhead { display: flex; align-items: baseline; justify-content: space-between; }
+.weekhead .rowdrop { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; }
+
+.primarytool { background: var(--ink) !important; color: var(--paper) !important; border-color: var(--ink) !important; }
+.savednote { margin-top: 12px; font-size: 12px; color: var(--good); }

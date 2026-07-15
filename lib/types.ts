@@ -3,6 +3,7 @@ export type ShiftName = "day" | "night" | "all";
 
 export interface Staff {
   id: string;
+  name?: string; // full name, optional display
   pref: number; // preferred weekly hours
   min: number; // hard minimum weekly hours
   max: number; // hard maximum weekly hours
@@ -33,7 +34,8 @@ export interface Config {
   dayStartHour: number;
   nightStartHour: number;
   shiftLengthHours: number;
-  staffPerShift: number;
+  // How many staff must be on each slot: coverage[day][0]=day shift, coverage[day][1]=night shift.
+  coverage: number[][];
   timeOff: TimeOff[];
   locked: Locked[];
   weights: Weights;
