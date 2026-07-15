@@ -446,3 +446,19 @@ td.timeslot { padding: 0; height: auto; vertical-align: top; }
   font-family: var(--font-mono);
 }
 .availcell.on { background: #e3ead9; color: var(--good); }
+
+/* Hour rail beside each shift row */
+.rowhead.slim.axis { position: relative; width: 52px; }
+.rowhead.slim.axis .sidelabel {
+  position: absolute; left: 4px; top: 50%; transform: translateY(-50%) rotate(180deg);
+  writing-mode: vertical-rl; font-family: var(--font-mono);
+  font-size: 9px; letter-spacing: 2px; color: var(--paper);
+}
+.tick {
+  position: absolute; right: 4px; font-family: var(--font-mono);
+  font-size: 8px; color: rgba(244, 241, 232, 0.75); transform: translateY(-50%);
+}
+.tick.t0 { top: 6px; transform: none; }
+.tick.t1 { top: 33.33%; }
+.tick.t2 { top: 66.66%; }
+.tick.t3 { bottom: 4px; top: auto; transform: none; }

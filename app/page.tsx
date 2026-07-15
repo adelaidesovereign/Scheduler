@@ -11,6 +11,7 @@ const PALETTE = [
 const colorFor = (i: number) => PALETTE[i % PALETTE.length];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const OT_THRESHOLD = 40;
+const APP_VERSION = "v7";
 const ROSTER_KEY = "sa_roster_v3";
 const LOG_KEY = "sa_hourslog_v1";
 const ADMIN_KEY = "sa_admin_v1";
@@ -152,6 +153,20 @@ export default function Page() {
   const [log, setLog] = useState<LoggedWeek[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [saveNote, setSaveNote] = useState("");
+
+  useEffect(() => {
+    // If the phone cached an old copy of the app, loading new pieces fails.
+    // Catch that once and pull the fresh version automatically.
+    const onErr = (ev: ErrorEvent) => {
+      const msg = String(ev.message || "");
+      if ((msg.includes("ChunkLoadError") || msg.includes("Loading chunk")) && !sessionStorage.getItem("sa_reloaded")) {
+        sessionStorage.setItem("sa_reloaded", "1");
+        location.reload();
+      }
+    };
+    window.addEventListener("error", onErr);
+    return () => window.removeEventListener("error", onErr);
+  }, []);
 
   useEffect(() => {
     try {
@@ -315,7 +330,7 @@ export default function Page() {
         <div className="meta">
           <span className="big">{mode === "week" ? weekLabel(weekStart) : monthPick}</span>
           <br />
-          at least two on, around the clock · nights always 8p to 8a
+          at least two on, around the clock · nights always 8p to 8a · {APP_VERSION}
         </div>
       </div>
       <div className="tabs">
@@ -502,9 +517,13 @@ function WeekBand({ weekStart, cfg, sol, colorIndex }: {
             })}
           </tr></thead>
           <tbody>
-            <tr><td className="rowhead slim"><span>DAY 8A–8P</span></td>
+            <tr><td className="rowhead slim axis"><span className="sidelabel">DAY</span>
+                <span className="tick t0">8a</span><span className="tick t1">12p</span>
+                <span className="tick t2">4p</span><span className="tick t3">8p</span></td>
               {dayBars.map((items, d) => <td className="slot timeslot" key={d}>{cell(items, true)}</td>)}</tr>
-            <tr><td className="rowhead slim"><span>NIGHT 8P–8A</span></td>
+            <tr><td className="rowhead slim axis"><span className="sidelabel">NIGHT</span>
+                <span className="tick t0">8p</span><span className="tick t1">12a</span>
+                <span className="tick t2">4a</span><span className="tick t3">8a</span></td>
               {nightBars.map((items, d) => <td className="slot timeslot" key={d}>{cell(items, false)}</td>)}</tr>
           </tbody>
         </table>
