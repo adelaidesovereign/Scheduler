@@ -11,7 +11,7 @@ const PALETTE = [
 const colorFor = (i: number) => PALETTE[i % PALETTE.length];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const OT_THRESHOLD = 40;
-const APP_VERSION = "v8";
+const APP_VERSION = "v9";
 const ROSTER_KEY = "sa_roster_v3";
 const LOG_KEY = "sa_hourslog_v1";
 const ADMIN_KEY = "sa_admin_v1";
@@ -259,7 +259,7 @@ export default function Page() {
       const cfg: Config = {
         staff: cleanStaff,
         blockOff: [...requestsToBlocks(allReqs, ws), ...availabilityToBlocks(staff, ws), ...extraOff],
-        weights: { hours: 100, night: 8, weekend: 6, fragment: 8, crowd: 20 },
+        weights: { hours: 100, night: 8, weekend: 6, fragment: 16, crowd: 30 },
         weekendDays: wd,
         dayLabels: Array.from({ length: DAYS }, (_, i) => prettyDate(addDaysISO(ws, i))),
         carryNights: [...carryNights],
@@ -418,6 +418,14 @@ export default function Page() {
 
           {results && genError.length === 0 && (
             <div className="printarea">
+              {results.some((w) => w.result.status === "OK" && w.result.compromises.length > 0) && (
+                <div className="tradeoffs noprint">
+                  <div className="tradeoffstitle">Built, with trade-offs the week forced:</div>
+                  {results.flatMap((w) => (w.result.status === "OK" ? w.result.compromises : [])).map((c, i) => (
+                    <div className="tradeoff" key={i}>{c}</div>
+                  ))}
+                </div>
+              )}
               {results.map((w) => w.result.status === "OK" && (
                 <WeekBand key={w.weekStart} weekStart={w.weekStart} cfg={w.cfg}
                   sol={w.result.sol} colorIndex={colorIndex} />

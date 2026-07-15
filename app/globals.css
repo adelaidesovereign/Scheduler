@@ -462,3 +462,8 @@ td.timeslot { padding: 0; height: auto; vertical-align: top; }
 .tick.t1 { top: 33.33%; }
 .tick.t2 { top: 66.66%; }
 .tick.t3 { bottom: 4px; top: auto; transform: none; }
+
+/* Named trade-offs when the week forced a bend */
+.tradeoffs { border: 1px solid #c9a227; background: #faf3dc; padding: 12px 14px; margin-bottom: 16px; border-radius: 2px; }
+.tradeoffstitle { font-family: var(--font-mono); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: #7a6212; margin-bottom: 6px; }
+.tradeoff { font-size: 12.5px; color: #6b5710; padding: 3px 0; }

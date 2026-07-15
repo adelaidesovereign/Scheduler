@@ -102,7 +102,7 @@ function rng(seed: number): () => number {
   return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
 }
 
-function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | null {
+function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number, relaxed: boolean): Solution | null {
   const n = cfg.staff.length;
   const assign: boolean[][][] = Array.from({ length: n }, () =>
     Array.from({ length: DAYS }, () => new Array(BLOCKS).fill(false))
@@ -111,10 +111,15 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
 
   const off = new Set(cfg.blockOff.map((t) => `${t.id}|${t.day}|${t.block}`));
   const blocked = (e: number, d: number, b: number) => off.has(`${cfg.staff[e].id}|${d}|${b}`);
-  // How many day blocks each person could possibly work this week.
+  // How many day blocks and nights each person could possibly work this week.
   const scarcity: number[] = cfg.staff.map((st, e) => {
     let c = 0;
     for (let d = 0; d < DAYS; d++) for (let b = 0; b < 3; b++) if (!blocked(e, d, b)) c++;
+    return c;
+  });
+  const nightScarcity: number[] = cfg.staff.map((st, e) => {
+    let c = 0;
+    for (let d = 0; d < DAYS; d++) if (!blocked(e, d, 3) && !blocked(e, d, 4) && !blocked(e, d, 5)) c++;
     return c;
   });
 
@@ -175,6 +180,11 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
       for (let e = 0; e < n; e++) if (canNight(e, d)) pool.push(e);
       if (pool.length === 0) return null;
       pool.sort((a, z) => {
+        // People with only a few possible nights take theirs first, so the
+        // flexible full-timers keep covering the nights only they can reach.
+        const ka = nightScarcity[a] + (blocksOf[a] >= bnd[a].prefBlocks ? 1000 : 0);
+        const kz = nightScarcity[z] + (blocksOf[z] >= bnd[z].prefBlocks ? 1000 : 0);
+        if (ka !== kz) return ka - kz;
         const da = blocksOf[a] - bnd[a].minBlocks;
         const dz = blocksOf[z] - bnd[z].minBlocks;
         if (da !== dz) return da - dz;                     // furthest below their hours first
@@ -200,8 +210,13 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
     for (let b = 0; b < 3; b++) if (blocked(e, d, b) || slotCount(d, b) >= MAX_PER_BLOCK) return false;
     return true;
   };
+  // Each attempt tries a different building strategy: full backbone,
+  // one full-day person, or free-form. Hard weeks often need staggered
+  // stretches that a rigid backbone would never produce.
+  const bbRoll = rand();
+  const backboneSpots = bbRoll < 0.5 ? FLOOR : bbRoll < 0.75 ? 1 : 0;
   for (let d = 0; d < DAYS; d++) {
-    for (let spot = 0; spot < FLOOR; spot++) {
+    for (let spot = 0; spot < backboneSpots; spot++) {
       const needAnchor = !anchorOn(d, 0) && !anchorOn(d, 1) && !anchorOn(d, 2);
       const pool: number[] = [];
       for (let e = 0; e < n; e++) {
@@ -250,6 +265,13 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
           const ca = dayRun(a, d).length > 0 ? 0 : 1;      // keep stretches whole
           const cz = dayRun(z, d).length > 0 ? 0 : 1;
           if (ca !== cz) return ca - cz;
+          if (!needAnchor) {
+            // Save anchor hours for anchor duty: when the slot just needs
+            // a second person, non-anchors step in first.
+            const ra = cfg.staff[a].anchor ? 1 : 0;
+            const rz = cfg.staff[z].anchor ? 1 : 0;
+            if (ra !== rz) return ra - rz;
+          }
           const da = blocksOf[a] - bnd[a].minBlocks;       // spread work by need first,
           const dz = blocksOf[z] - bnd[z].minBlocks;       // so anchors last the week
           if (da !== dz) return da - dz;
@@ -462,7 +484,8 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
   }
   for (let e = 0; e < n; e++) {
     const s = cfg.staff[e];
-    if (blocksOf[e] < bnd[e].minBlocks || blocksOf[e] > bnd[e].maxBlocks) return null;
+    if (blocksOf[e] > bnd[e].maxBlocks) return null;
+    if (!relaxed && blocksOf[e] < bnd[e].minBlocks) return null;
     for (let d = 0; d < DAYS; d++) {
       const nightBlocks = NIGHT.filter((b) => assign[e][d][b]).length;
       if (nightBlocks !== 0 && nightBlocks !== 3) return null;          // whole nights only
@@ -488,9 +511,11 @@ function score(cfg: Config, bnd: Bounds[], sol: Solution): number {
   const weekend = new Array(n).fill(0);
   const cN = cfg.carryNights || new Array(n).fill(0);
   const cW = cfg.carryWeekends || new Array(n).fill(0);
+  let underMin = 0;
   for (let e = 0; e < n; e++) {
     const dev = Math.abs(sol.blocksOf[e] - bnd[e].prefBlocks);
-    hoursDev += cfg.staff[e].primary ? dev * 2 : dev;      // primaries protected hardest
+    hoursDev += cfg.staff[e].primary ? dev * 2 : dev;
+    underMin += Math.max(0, bnd[e].minBlocks - sol.blocksOf[e]);      // primaries protected hardest
     let nightsWorked = 0;
     for (let d = 0; d < DAYS; d++) {
       const day = sol.assign[e][d];
@@ -513,6 +538,7 @@ function score(cfg: Config, bnd: Bounds[], sol: Solution): number {
   }
   const spread = (arr: number[]) => arr.length ? Math.max(...arr) - Math.min(...arr) : 0;
   return (
+    (w.hours ?? 100) * 4 * underMin +
     (w.hours ?? 100) * hoursDev +
     (w.night ?? 0) * spread(nightCounts) +
     (w.weekend ?? 0) * spread(weekend) +
@@ -530,13 +556,28 @@ export function solve(cfg: Config, budgetMs = 400): SolveResult {
   const start = Date.now();
   let attempts = 0, feasible = 0;
   const rand = rng(cfg.seed || Math.floor(Math.random() * 1e9));
-  while (Date.now() - start < budgetMs && attempts < 3000) {
+  // First: play strictly by every rule.
+  while (Date.now() - start < budgetMs * 0.55 && attempts < 2000) {
     attempts++;
-    const sol = solveOnce(cfg, bnd, rand);
+    const sol = solveOnce(cfg, bnd, rand, false);
     if (!sol) continue;
     feasible++;
     const sc = score(cfg, bnd, sol);
     if (sc < bestScore) { bestScore = sc; best = sol; }
+  }
+  // If the strict rules cannot all hold at once, do what a good human
+  // scheduler does: bend the soft ones as little as possible and say so.
+  let bent = false;
+  if (!best) {
+    bent = true;
+    while (Date.now() - start < budgetMs && attempts < 4000) {
+      attempts++;
+      const sol = solveOnce(cfg, bnd, rand, true);
+      if (!sol) continue;
+      feasible++;
+      const sc = score(cfg, bnd, sol);
+      if (sc < bestScore) { bestScore = sc; best = sol; }
+    }
   }
   if (!best) {
     return {
@@ -548,7 +589,22 @@ export function solve(cfg: Config, budgetMs = 400): SolveResult {
       ],
     };
   }
-  return { status: "OK", sol: best, score: bestScore, attempts, feasible };
+  const compromises: string[] = [];
+  if (bent) {
+    const label = (d: number) => cfg.dayLabels?.[d] || `day ${d + 1}`;
+    for (let e = 0; e < cfg.staff.length; e++) {
+      const shortBlocks = bnd[e].minBlocks - best.blocksOf[e];
+      if (shortBlocks > 0) {
+        compromises.push(`${cfg.staff[e].id} lands ${best.blocksOf[e] * BLOCK_HOURS}h, ${shortBlocks * BLOCK_HOURS}h under their minimum, because availability and the other rules left no room.`);
+      }
+      for (let d = 0; d < DAYS; d++) {
+        let run = 0;
+        for (let b = 0; b < 3; b++) if (best.assign[e][d][b]) run++;
+        if (run === 1) compromises.push(`${cfg.staff[e].id} carries a 4-hour piece on ${label(d)}; it was the only way to hold coverage.`);
+      }
+    }
+  }
+  return { status: "OK", sol: best, score: bestScore, attempts, feasible, compromises };
 }
 
 export function summarize(cfg: Config, sol: Solution) {

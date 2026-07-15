@@ -45,4 +45,4 @@ export interface Solution {
 export type SolveResult =
   | { status: "INVALID"; problems: string[] }
   | { status: "INFEASIBLE"; problems: string[] }
-  | { status: "OK"; sol: Solution; score: number; attempts: number; feasible: number };
+  | { status: "OK"; sol: Solution; score: number; attempts: number; feasible: number; compromises: string[] };
