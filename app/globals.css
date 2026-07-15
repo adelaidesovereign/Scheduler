@@ -272,3 +272,39 @@ input:focus, select:focus { outline: 2px solid var(--seal); outline-offset: 1px;
   .wrap { padding: 0; }
   body { background: #fff; }
 }
+
+/* Capacity readout under the roster */
+.capline {
+  margin-top: 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+}
+.capline.bad { color: var(--warn); }
+
+/* Custom-hours request rows */
+.reqblock { margin-bottom: 10px; }
+.reqtimes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-left: 2px;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+.reqtimes input[type="time"] { width: auto; padding: 6px 7px; font-size: 12px; }
+.reqnote { font-size: 10px; }
+
+.honored {
+  margin-top: 12px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  border: 1px dashed var(--line);
+  border-radius: 2px;
+  padding: 10px 12px;
+  background: var(--card);
+}
