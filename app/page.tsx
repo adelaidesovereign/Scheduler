@@ -15,9 +15,9 @@ const OT_THRESHOLD = 40;
 const ROSTER_KEY = "sa_roster_v1";
 const LOG_KEY = "sa_hourslog_v1";
 
-// Block time ranges: [start, end) in hours from midnight of that day.
-// Block 2 crosses midnight; block 3 lives in the next calendar morning.
-const BLOCK_LABEL = ["8a–2p", "2p–8p", "8p–2a", "2a–8a"];
+// Six 4-hour blocks per operational day. Blocks 4 and 5 live in the next
+// calendar morning but belong to this day's night shift.
+const BLOCK_LABEL = ["8a–12p", "12p–4p", "4p–8p", "8p–12a", "12a–4a", "4a–8a"];
 
 interface RosterRow { id: string; name: string; pref: string; min: string; max: string; lean: Lean; }
 
@@ -74,9 +74,9 @@ function weekLabel(iso: string): string {
   return `${a.toLocaleDateString("en-US", opt)} to ${b.toLocaleDateString("en-US", opt)}`;
 }
 
-// Turn requests into block-level holds. Custom windows hit exactly the blocks
-// they overlap: an 8a-12p appointment blocks the morning half only, so the
-// person can still take 2p-8p that day.
+// Turn requests into 4-hour holds. A custom window touches only the blocks it
+// overlaps: an 8a-12p appointment holds just the morning, so that person can
+// still work 12p-8p the same day if their hours need it.
 function expandRequests(reqs: Request[]): BlockOff[] {
   const out: BlockOff[] = [];
   const push = (id: string, day: number, block: number) => {
@@ -84,17 +84,18 @@ function expandRequests(reqs: Request[]): BlockOff[] {
   };
   for (const r of reqs) {
     if (r.kind === "all") { for (let b = 0; b < BLOCKS; b++) push(r.id, r.day, b); continue; }
-    if (r.kind === "day") { push(r.id, r.day, 0); push(r.id, r.day, 1); continue; }
-    if (r.kind === "night") { push(r.id, r.day, 2); push(r.id, r.day, 3); continue; }
+    if (r.kind === "day") { push(r.id, r.day, 0); push(r.id, r.day, 1); push(r.id, r.day, 2); continue; }
+    if (r.kind === "night") { push(r.id, r.day, 3); push(r.id, r.day, 4); push(r.id, r.day, 5); continue; }
     const from = parseInt(r.from.split(":")[0], 10) + parseInt(r.from.split(":")[1], 10) / 60;
     const to = parseInt(r.to.split(":")[0], 10) + parseInt(r.to.split(":")[1], 10) / 60;
     if (!(to > from)) continue;
     const overlaps = (a1: number, a2: number, b1: number, b2: number) => a1 < b2 && b1 < a2;
-    if (overlaps(from, to, 8, 14)) push(r.id, r.day, 0);
-    if (overlaps(from, to, 14, 20)) push(r.id, r.day, 1);
-    if (overlaps(from, to, 20, 24)) push(r.id, r.day, 2);
-    if (overlaps(from, to, 0, 2)) push(r.id, r.day - 1, 2);
-    if (overlaps(from, to, 2, 8)) push(r.id, r.day - 1, 3);
+    if (overlaps(from, to, 8, 12)) push(r.id, r.day, 0);
+    if (overlaps(from, to, 12, 16)) push(r.id, r.day, 1);
+    if (overlaps(from, to, 16, 20)) push(r.id, r.day, 2);
+    if (overlaps(from, to, 20, 24)) push(r.id, r.day, 3);
+    if (overlaps(from, to, 0, 4)) push(r.id, r.day - 1, 4);
+    if (overlaps(from, to, 4, 8)) push(r.id, r.day - 1, 5);
   }
   return out;
 }
@@ -198,7 +199,7 @@ export default function Page() {
     };
     setCfgUsed(cfg);
     try {
-      setResult(solve(cfg, 350));
+      setResult(solve(cfg, 400));
     } catch (err) {
       setResult({
         status: "INVALID",
@@ -309,7 +310,7 @@ export default function Page() {
             </table>
             <button className="addrow" onClick={addStaff}>+ Add staff</button>
             <div className={`capline ${capBad ? "bad" : ""}`}>
-              Set each person&apos;s hours; staffing per shift works itself out. Hours land in 6-hour steps.
+              Set each person&apos;s hours; staffing per shift works itself out. Hours land in 4-hour steps.
               Keeping two on all week takes {capacity.floorHours} staff-hours · your minimums claim {capacity.minH} · maximums allow {capacity.maxH}
               {capBad && <span> — maximums cannot hold the floor, raise some Max hours or add staff</span>}
             </div>
@@ -320,7 +321,7 @@ export default function Page() {
             {requests.length === 0 && (
               <p style={{ fontSize: 12, color: "var(--ink-soft)", margin: "0 0 10px" }}>
                 None yet. Block a whole day, one shift, or a window like an appointment.
-                A partial window only blocks the half-shifts it touches.
+                A partial window only holds the exact hours it touches.
               </p>
             )}
             {requests.map((req, i) => (
@@ -391,13 +392,22 @@ export default function Page() {
   );
 }
 
-// A person's presence on one side (day or night) of one date, with real times.
+// A person's presence on one side of one date, with real times.
+// Stretches are contiguous, so start of first block to end of last block.
+const DAY_STARTS = ["8a", "12p", "4p"];
+const DAY_ENDS = ["12p", "4p", "8p"];
+const NIGHT_STARTS = ["8p", "12a", "4a"];
+const NIGHT_ENDS = ["12a", "4a", "8a"];
 function presence(day: boolean[], side: "day" | "night"): string | null {
-  const [a, b] = side === "day" ? [day[0], day[1]] : [day[2], day[3]];
-  if (a && b) return side === "day" ? "8a–8p" : "8p–8a";
-  if (a) return side === "day" ? "8a–2p" : "8p–2a";
-  if (b) return side === "day" ? "2p–8p" : "2a–8a";
-  return null;
+  const offset = side === "day" ? 0 : 3;
+  const starts = side === "day" ? DAY_STARTS : NIGHT_STARTS;
+  const ends = side === "day" ? DAY_ENDS : NIGHT_ENDS;
+  let first = -1, last = -1;
+  for (let i = 0; i < 3; i++) {
+    if (day[offset + i]) { if (first < 0) first = i; last = i; }
+  }
+  if (first < 0) return null;
+  return `${starts[first]}–${ends[last]}`;
 }
 
 function ResultView({
