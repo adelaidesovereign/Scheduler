@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { solve, summarize, DAYS } from "@/lib/solver";
-import { Config, Lean, Staff, TimeOff } from "@/lib/types";
+import { solve, summarize, DAYS, BLOCKS, BLOCK_HOURS, FLOOR } from "@/lib/solver";
+import { Config, Lean, Staff, BlockOff } from "@/lib/types";
 
 const PALETTE = [
   "#F4C6DA", "#D8C6F0", "#FBE39A", "#F7CB98", "#F4A6A6", "#9BE5EE",
@@ -11,12 +11,13 @@ const PALETTE = [
 const colorFor = (i: number) => PALETTE[i % PALETTE.length];
 const DAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-const DAY_START = 8;
-const NIGHT_START = 20;
-const OT_THRESHOLD = 40; // hours per week before overtime
-
+const OT_THRESHOLD = 40;
 const ROSTER_KEY = "sa_roster_v1";
 const LOG_KEY = "sa_hourslog_v1";
+
+// Block time ranges: [start, end) in hours from midnight of that day.
+// Block 2 crosses midnight; block 3 lives in the next calendar morning.
+const BLOCK_LABEL = ["8a–2p", "2p–8p", "8p–2a", "2a–8a"];
 
 interface RosterRow { id: string; name: string; pref: string; min: string; max: string; lean: Lean; }
 
@@ -28,11 +29,10 @@ interface Request {
   to: string;
 }
 
-// One saved week in the hours log.
 interface LoggedWeek {
-  weekStart: string; // ISO date
-  hours: Record<string, number>; // initials -> hours
-  names: Record<string, string>; // initials -> name at time of save
+  weekStart: string;
+  hours: Record<string, number>;
+  names: Record<string, string>;
   savedAt: string;
 }
 
@@ -51,18 +51,10 @@ const START_ROSTER: RosterRow[] = [
   { id: "R3", name: "", pref: "24", min: "12", max: "36", lean: "any" },
 ];
 
-const defaultCoverage = () => Array.from({ length: DAYS }, () => ["2", "2"]);
-
 function toNum(v: string, fallback = 0): number {
   const n = parseInt(v, 10);
   if (Number.isNaN(n) || n < 0) return fallback;
   return Math.min(n, 96);
-}
-
-function fmtHour(h: number): string {
-  const suffix = h < 12 ? "AM" : "PM";
-  let base = h % 12; if (base === 0) base = 12;
-  return `${base} ${suffix}`;
 }
 function fmtClock(t: string): string {
   const [hs, ms] = t.split(":");
@@ -82,26 +74,40 @@ function weekLabel(iso: string): string {
   return `${a.toLocaleDateString("en-US", opt)} to ${b.toLocaleDateString("en-US", opt)}`;
 }
 
-function expandRequests(reqs: Request[]): TimeOff[] {
-  const out: TimeOff[] = [];
+// Turn requests into block-level holds. Custom windows hit exactly the blocks
+// they overlap: an 8a-12p appointment blocks the morning half only, so the
+// person can still take 2p-8p that day.
+function expandRequests(reqs: Request[]): BlockOff[] {
+  const out: BlockOff[] = [];
+  const push = (id: string, day: number, block: number) => {
+    if (day >= 0 && day < DAYS) out.push({ id, day, block });
+  };
   for (const r of reqs) {
-    if (r.kind !== "custom") { out.push({ id: r.id, day: r.day, shift: r.kind }); continue; }
+    if (r.kind === "all") { for (let b = 0; b < BLOCKS; b++) push(r.id, r.day, b); continue; }
+    if (r.kind === "day") { push(r.id, r.day, 0); push(r.id, r.day, 1); continue; }
+    if (r.kind === "night") { push(r.id, r.day, 2); push(r.id, r.day, 3); continue; }
     const from = parseInt(r.from.split(":")[0], 10) + parseInt(r.from.split(":")[1], 10) / 60;
     const to = parseInt(r.to.split(":")[0], 10) + parseInt(r.to.split(":")[1], 10) / 60;
     if (!(to > from)) continue;
     const overlaps = (a1: number, a2: number, b1: number, b2: number) => a1 < b2 && b1 < a2;
-    if (overlaps(from, to, DAY_START, NIGHT_START)) out.push({ id: r.id, day: r.day, shift: "day" });
-    if (overlaps(from, to, NIGHT_START, 24)) out.push({ id: r.id, day: r.day, shift: "night" });
-    if (overlaps(from, to, 0, DAY_START) && r.day > 0) out.push({ id: r.id, day: r.day - 1, shift: "night" });
+    if (overlaps(from, to, 8, 14)) push(r.id, r.day, 0);
+    if (overlaps(from, to, 14, 20)) push(r.id, r.day, 1);
+    if (overlaps(from, to, 20, 24)) push(r.id, r.day, 2);
+    if (overlaps(from, to, 0, 2)) push(r.id, r.day - 1, 2);
+    if (overlaps(from, to, 2, 8)) push(r.id, r.day - 1, 3);
   }
   return out;
+}
+
+function describeBlocks(bo: BlockOff[]): string {
+  if (!bo.length) return "nothing yet";
+  return bo.map((x) => BLOCK_LABEL[x.block]).join(" + ");
 }
 
 export default function Page() {
   const [tab, setTab] = useState<"build" | "ledger">("build");
   const [weekStart, setWeekStart] = useState("2026-07-17");
   const [staff, setStaff] = useState<RosterRow[]>(START_ROSTER);
-  const [coverage, setCoverage] = useState<string[][]>(defaultCoverage());
   const [requests, setRequests] = useState<Request[]>([]);
   const [result, setResult] = useState<ReturnType<typeof solve> | null>(null);
   const [cfgUsed, setCfgUsed] = useState<Config | null>(null);
@@ -109,24 +115,27 @@ export default function Page() {
   const [loaded, setLoaded] = useState(false);
   const [saveNote, setSaveNote] = useState("");
 
-  // Load saved roster and hours log once, on this device.
   useEffect(() => {
     try {
       const r = localStorage.getItem(ROSTER_KEY);
       if (r) {
         const parsed = JSON.parse(r);
-        if (Array.isArray(parsed) && parsed.length) setStaff(parsed);
+        if (Array.isArray(parsed) && parsed.length) {
+          setStaff(parsed.map((x: Partial<RosterRow>) => ({
+            id: x.id ?? "??", name: x.name ?? "", pref: x.pref ?? "24",
+            min: x.min ?? "12", max: x.max ?? "36", lean: x.lean ?? "any",
+          })));
+        }
       }
       const l = localStorage.getItem(LOG_KEY);
       if (l) {
         const parsed = JSON.parse(l);
         if (Array.isArray(parsed)) setLog(parsed);
       }
-    } catch { /* fresh start if storage is unreadable */ }
+    } catch {}
     setLoaded(true);
   }, []);
 
-  // Persist roster edits so names and hours survive between visits.
   useEffect(() => {
     if (!loaded) return;
     try { localStorage.setItem(ROSTER_KEY, JSON.stringify(staff)); } catch {}
@@ -147,17 +156,13 @@ export default function Page() {
     return out;
   }, [startDow]);
 
+  // Live math in hours, so nothing needs to be worked out by hand.
   const capacity = useMemo(() => {
-    let needed = 0;
-    for (const day of coverage) for (const c of day) needed += toNum(c, 2);
-    let minS = 0, maxS = 0, prefS = 0;
-    for (const s of staff) {
-      minS += Math.ceil(toNum(s.min) / 12);
-      maxS += Math.floor(toNum(s.max) / 12);
-      prefS += Math.round(toNum(s.pref) / 12);
-    }
-    return { needed, minS, maxS, prefS };
-  }, [staff, coverage]);
+    const floorHours = DAYS * BLOCKS * FLOOR * BLOCK_HOURS; // 336
+    let minH = 0, maxH = 0, prefH = 0;
+    for (const s of staff) { minH += toNum(s.min); maxH += toNum(s.max); prefH += toNum(s.pref); }
+    return { floorHours, minH, maxH, prefH };
+  }, [staff]);
 
   function updateStaff(i: number, patch: Partial<RosterRow>) {
     setStaff((s) => s.map((row, k) => (k === i ? { ...row, ...patch } : row)));
@@ -165,9 +170,6 @@ export default function Page() {
   function removeStaff(i: number) { setStaff((s) => s.filter((_, k) => k !== i)); }
   function addStaff() {
     setStaff((s) => [...s, { id: "NEW", name: "", pref: "24", min: "12", max: "36", lean: "any" }]);
-  }
-  function setCov(d: number, s: number, v: string) {
-    setCoverage((c) => c.map((day, di) => di === d ? day.map((x, si) => si === s ? v.replace(/[^0-9]/g, "") : x) : day));
   }
   function addRequest() {
     setRequests((t) => [...t, { id: staff[0]?.id || "", day: 0, kind: "all", from: "08:00", to: "12:00" }]);
@@ -187,22 +189,16 @@ export default function Page() {
       max: toNum(s.max),
       lean: s.lean,
     }));
-    const cov = coverage.map((day) => day.map((c) => toNum(c, 2)));
     const cfg: Config = {
       staff: cleanStaff,
-      dayStartHour: DAY_START,
-      nightStartHour: NIGHT_START,
-      shiftLengthHours: 12,
-      coverage: cov,
-      timeOff: expandRequests(requests),
-      locked: [],
-      weights: { hours: 100, night: 8, weekend: 6, lean: 4 },
+      blockOff: expandRequests(requests),
+      weights: { hours: 100, night: 8, weekend: 6, lean: 4, fragment: 3 },
       weekendDays,
       seed: Math.floor(Math.random() * 1e9),
     };
     setCfgUsed(cfg);
     try {
-      setResult(solve(cfg, 300));
+      setResult(solve(cfg, 350));
     } catch (err) {
       setResult({
         status: "INVALID",
@@ -216,22 +212,15 @@ export default function Page() {
     const stats = summarize(cfgUsed, result.sol);
     const names: Record<string, string> = {};
     for (const s of cfgUsed.staff) names[s.id] = s.name || "";
-    const entry: LoggedWeek = {
-      weekStart,
-      hours: stats.hours,
-      names,
-      savedAt: new Date().toISOString(),
-    };
+    const entry: LoggedWeek = { weekStart, hours: stats.hours, names, savedAt: new Date().toISOString() };
     setLog((l) => {
       const others = l.filter((w) => w.weekStart !== weekStart);
-      return [...others, entry].sort((a, b) => a.weekStart < b.weekStart ? 1 : -1);
+      return [...others, entry].sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
     });
     setSaveNote(`Week of ${weekLabel(weekStart)} saved to the ledger.`);
   }
 
-  function deleteWeek(ws: string) {
-    setLog((l) => l.filter((w) => w.weekStart !== ws));
-  }
+  function deleteWeek(ws: string) { setLog((l) => l.filter((w) => w.weekStart !== ws)); }
 
   const colorIndex = useMemo(() => {
     const m: Record<string, number> = {};
@@ -240,7 +229,7 @@ export default function Page() {
   }, [staff]);
 
   const selectAll = (e: React.FocusEvent<HTMLInputElement>) => e.target.select();
-  const capBad = capacity.minS > capacity.needed || capacity.maxS < capacity.needed;
+  const capBad = capacity.maxH < capacity.floorHours;
 
   return (
     <div className="wrap">
@@ -252,7 +241,7 @@ export default function Page() {
         <div className="meta">
           <span className="big">{weekLabel(weekStart)}</span>
           <br />
-          day {fmtHour(DAY_START)} to {fmtHour(NIGHT_START)} · night {fmtHour(NIGHT_START)} to {fmtHour(DAY_START)}
+          at least two on the floor, around the clock · staffing adjusts itself to hours and requests
         </div>
       </div>
       <div className="tabs">
@@ -272,36 +261,6 @@ export default function Page() {
               <label>Week starts</label>
               <input type="date" value={weekStart} onChange={(e) => setWeekStart(e.target.value)} />
             </div>
-          </div>
-
-          <div className="panel">
-            <h2>Staff On Per Shift</h2>
-            <table className="covgrid">
-              <thead>
-                <tr>
-                  <th></th>
-                  {Array.from({ length: DAYS }).map((_, d) => {
-                    const dt = addDays(weekStart, d);
-                    return <th key={d}>{DAY_ABBR[dt.getDay()]}<br /><span className="date">{dt.getMonth() + 1}/{dt.getDate()}</span></th>;
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td className="covlabel">Day</td>
-                  {coverage.map((day, d) => (
-                    <td key={d}><input type="text" inputMode="numeric" pattern="[0-9]*" value={day[0]} onFocus={selectAll} onChange={(e) => setCov(d, 0, e.target.value)} /></td>
-                  ))}
-                </tr>
-                <tr>
-                  <td className="covlabel">Night</td>
-                  {coverage.map((day, d) => (
-                    <td key={d}><input type="text" inputMode="numeric" pattern="[0-9]*" value={day[1]} onFocus={selectAll} onChange={(e) => setCov(d, 1, e.target.value)} /></td>
-                  ))}
-                </tr>
-              </tbody>
-            </table>
-            <p className="covnote">Default is two on every shift. Raise any box for heavier days.</p>
           </div>
 
           <div className="panel">
@@ -350,9 +309,9 @@ export default function Page() {
             </table>
             <button className="addrow" onClick={addStaff}>+ Add staff</button>
             <div className={`capline ${capBad ? "bad" : ""}`}>
-              This week asks for {capacity.needed} shifts · minimums claim {capacity.minS} · maximums allow {capacity.maxS} · targets total {capacity.prefS}
-              {capacity.minS > capacity.needed && <span> — minimums exceed the week, lower some Min hours</span>}
-              {capacity.maxS < capacity.needed && <span> — maximums cannot cover the week, raise some Max hours or add staff</span>}
+              Set each person&apos;s hours; staffing per shift works itself out. Hours land in 6-hour steps.
+              Keeping two on all week takes {capacity.floorHours} staff-hours · your minimums claim {capacity.minH} · maximums allow {capacity.maxH}
+              {capBad && <span> — maximums cannot hold the floor, raise some Max hours or add staff</span>}
             </div>
           </div>
 
@@ -361,6 +320,7 @@ export default function Page() {
             {requests.length === 0 && (
               <p style={{ fontSize: 12, color: "var(--ink-soft)", margin: "0 0 10px" }}>
                 None yet. Block a whole day, one shift, or a window like an appointment.
+                A partial window only blocks the half-shifts it touches.
               </p>
             )}
             {requests.map((req, i) => (
@@ -388,9 +348,7 @@ export default function Page() {
                     <input type="time" value={req.from} onChange={(e) => updateRequest(i, { from: e.target.value })} />
                     <span>to</span>
                     <input type="time" value={req.to} onChange={(e) => updateRequest(i, { to: e.target.value })} />
-                    <span className="reqnote">
-                      blocks: {expandRequests([req]).map((t) => `${t.shift} shift`).join(" + ") || "nothing yet"}
-                    </span>
+                    <span className="reqnote">holds: {describeBlocks(expandRequests([req]))}</span>
                   </div>
                 )}
               </div>
@@ -405,8 +363,9 @@ export default function Page() {
           {!result && (
             <div className="panel">
               <div className="empty">
-                Set your coverage, roster, and requests, then generate.<br />
-                Every schedule is checked against every hard rule before it appears.
+                Set hours and requests, then generate.<br />
+                The engine keeps at least two on at all times and decides on its own when a
+                third person or a split shift is needed to land everyone&apos;s hours.
               </div>
             </div>
           )}
@@ -418,10 +377,6 @@ export default function Page() {
                 <span className="label">No valid schedule exists for these inputs</span>
               </div>
               {result.problems.map((p, i) => <div className="problem" key={i}>{p}</div>)}
-              <div className="problem" style={{ borderColor: "var(--line)", color: "var(--ink-soft)", background: "var(--card)" }}>
-                Quick math: this week asks for {capacity.needed} shifts. Your minimums claim {capacity.minS} and your
-                maximums allow {capacity.maxS}. Requests off shrink what is possible further. Adjust and generate again.
-              </div>
             </div>
           )}
 
@@ -434,6 +389,15 @@ export default function Page() {
       )}
     </div>
   );
+}
+
+// A person's presence on one side (day or night) of one date, with real times.
+function presence(day: boolean[], side: "day" | "night"): string | null {
+  const [a, b] = side === "day" ? [day[0], day[1]] : [day[2], day[3]];
+  if (a && b) return side === "day" ? "8a–8p" : "8p–8a";
+  if (a) return side === "day" ? "8a–2p" : "8p–2a";
+  if (b) return side === "day" ? "2p–8p" : "2a–8a";
+  return null;
 }
 
 function ResultView({
@@ -449,29 +413,40 @@ function ResultView({
 }) {
   const { sol } = result;
   const stats = summarize(cfg, sol);
-  const idOf = (e: number) => cfg.staff[e].id;
 
-  const grid: string[][][] = [];
+  // Grid cells: for each day and side, who is on and at what times.
+  const grid: { id: string; when: string }[][][] = [];
   for (let d = 0; d < DAYS; d++) {
     grid[d] = [[], []];
-    for (let s = 0; s < 2; s++) {
-      for (let e = 0; e < cfg.staff.length; e++) {
-        if (sol.assign[e][d][s]) grid[d][s].push(idOf(e));
-      }
+    for (let e = 0; e < cfg.staff.length; e++) {
+      const pDay = presence(sol.assign[e][d], "day");
+      const pNight = presence(sol.assign[e][d], "night");
+      if (pDay) grid[d][0].push({ id: cfg.staff[e].id, when: pDay });
+      if (pNight) grid[d][1].push({ id: cfg.staff[e].id, when: pNight });
     }
   }
-  const allCovered = grid.every((day, d) => day.every((slot, s) => slot.length === cfg.coverage[d][s]));
+  // Floor check straight from the blocks.
+  let floorOk = true;
+  for (let d = 0; d < DAYS && floorOk; d++) {
+    for (let b = 0; b < BLOCKS; b++) {
+      let c = 0;
+      for (let e = 0; e < cfg.staff.length; e++) if (sol.assign[e][d][b]) c++;
+      if (c < FLOOR) { floorOk = false; break; }
+    }
+  }
 
-  const chip = (id: string) => (
-    <span className="chip" key={id} style={{ background: colorFor(colorIndex[id] ?? 0) }}>{id}</span>
+  const chip = (p: { id: string; when: string }, k: number) => (
+    <span className="chip" key={k} style={{ background: colorFor(colorIndex[p.id] ?? 0) }}>
+      {p.id}<span className="chiptime">{p.when}</span>
+    </span>
   );
 
   return (
     <div>
       <div className="sealbar">
-        <span className={`dot ${allCovered ? "good" : "warn"}`} />
+        <span className={`dot ${floorOk ? "good" : "warn"}`} />
         <span className="label">
-          {allCovered ? "Coverage verified · every shift fully staffed" : "Coverage gap detected"}
+          {floorOk ? "Coverage verified · at least two on, every hour of the week" : "Coverage gap detected"}
         </span>
         <span className="sub">best of {result.feasible.toLocaleString()} valid schedules</span>
       </div>
@@ -558,7 +533,6 @@ function LedgerView({
   colorIndex: Record<string, number>;
   onDelete: (ws: string) => void;
 }) {
-  // Running totals across every saved week.
   const totals = useMemo(() => {
     const t: Record<string, { hours: number; ot: number; weeks: number; name: string }> = {};
     for (const w of log) {
@@ -570,7 +544,6 @@ function LedgerView({
         if (w.names[id]) t[id].name = w.names[id];
       }
     }
-    // Prefer the current roster name when one is set.
     for (const s of staff) if (t[s.id] && s.name) t[s.id].name = s.name;
     return t;
   }, [log, staff]);

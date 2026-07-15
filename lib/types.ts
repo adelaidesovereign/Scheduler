@@ -3,23 +3,18 @@ export type ShiftName = "day" | "night" | "all";
 
 export interface Staff {
   id: string;
-  name?: string; // full name, optional display
+  name?: string;
   pref: number; // preferred weekly hours
   min: number; // hard minimum weekly hours
   max: number; // hard maximum weekly hours
   lean: Lean;
 }
 
-export interface TimeOff {
-  id: string;
-  day: number; // 0 = week start
-  shift: ShiftName;
-}
-
-export interface Locked {
+// A block-level hold: person cannot work block b of day d.
+export interface BlockOff {
   id: string;
   day: number;
-  shift: "day" | "night";
+  block: number; // 0: 8a-2p, 1: 2p-8p, 2: 8p-2a, 3: 2a-8a
 }
 
 export interface Weights {
@@ -27,25 +22,20 @@ export interface Weights {
   night: number;
   weekend: number;
   lean: number;
+  fragment: number; // lone half-shifts cost a little, full shifts preferred
 }
 
 export interface Config {
   staff: Staff[];
-  dayStartHour: number;
-  nightStartHour: number;
-  shiftLengthHours: number;
-  // How many staff must be on each slot: coverage[day][0]=day shift, coverage[day][1]=night shift.
-  coverage: number[][];
-  timeOff: TimeOff[];
-  locked: Locked[];
+  blockOff: BlockOff[];
   weights: Weights;
   weekendDays: number[];
   seed?: number;
 }
 
 export interface Solution {
-  assign: boolean[][][]; // [employee][day][shift]
-  shiftsOf: number[];
+  assign: boolean[][][]; // [employee][day][block]
+  blocksOf: number[];
 }
 
 export type SolveResult =
