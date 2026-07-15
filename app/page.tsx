@@ -642,9 +642,9 @@ function StaffView({
               <table className="availgrid"><thead><tr><th></th>
                 {DOW_SHORT.map((d, k) => <th key={k}>{d}</th>)}
               </tr></thead><tbody>
-                {AVAIL_SLOTS.map((slot, si) => (
+                {(row.side === "night" ? [3] : row.side === "day" ? [0, 1, 2] : [0, 1, 2, 3]).map((si) => (
                   <tr key={si}>
-                    <td className="availslot">{slot}</td>
+                    <td className="availslot">{AVAIL_SLOTS[si]}</td>
                     {Array.from({ length: 7 }).map((_, dw) => {
                       const on = row.avail?.[dw]?.[si] ?? true;
                       return (

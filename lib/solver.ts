@@ -241,7 +241,11 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
           if (needAnchor) {
             // Spend the most constrained anchor first where they CAN work,
             // saving flexible anchors for the slots only they can hold.
-            if (scarcity[a] !== scarcity[z]) return scarcity[a] - scarcity[z];
+            // Fairness guard: once someone reaches their target hours, they
+            // step back so the load never revolves around one person.
+            const ka = scarcity[a] + (blocksOf[a] >= bnd[a].prefBlocks ? 1000 : 0);
+            const kz = scarcity[z] + (blocksOf[z] >= bnd[z].prefBlocks ? 1000 : 0);
+            if (ka !== kz) return ka - kz;
           }
           const ca = dayRun(a, d).length > 0 ? 0 : 1;      // keep stretches whole
           const cz = dayRun(z, d).length > 0 ? 0 : 1;
