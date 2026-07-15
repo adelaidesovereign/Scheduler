@@ -11,7 +11,7 @@ const PALETTE = [
 const colorFor = (i: number) => PALETTE[i % PALETTE.length];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const OT_THRESHOLD = 40;
-const APP_VERSION = "v10";
+const APP_VERSION = "v11";
 const ROSTER_KEY = "sa_roster_v3";
 const LOG_KEY = "sa_hourslog_v1";
 const ADMIN_KEY = "sa_admin_v1";

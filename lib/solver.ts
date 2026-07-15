@@ -4,7 +4,7 @@ export const DAYS = 7;
 export const BLOCKS = 6;        // 0:8a-12p 1:12p-4p 2:4p-8p | 3:8p-12a 4:12a-4a 5:4a-8a
 export const BLOCK_HOURS = 4;
 export const FLOOR = 2;         // at least two on, every hour, always
-export const MAX_PER_BLOCK = 3;  // two on at a time is the model; a third only when minimums force it
+export const MAX_PER_BLOCK = 2;  // two seats, period: nothing can ever be placed third
 const NIGHT = [3, 4, 5];        // the night shift is one piece: 8p-8a, always 12 hours
 
 const isDaySide = (b: number) => b < 3;
@@ -53,10 +53,6 @@ function validate(cfg: Config): string[] {
   const nightCap = cfg.staff.reduce((a, s, i) => a + (s.side !== "day" ? b[i].maxBlocks : 0), 0);
   if (nightCap * BLOCK_HOURS < DAYS * 3 * FLOOR * BLOCK_HOURS) {
     problems.push("Night coverage cannot be held: night-capable staff maximums are below the 168 hours the night side needs. Raise a night person's Max or add night staff.");
-  }
-  const dayMin = cfg.staff.reduce((a, s, i) => a + (s.side !== "night" ? b[i].minBlocks : 0), 0);
-  if (dayMin > DAYS * 3 * 3) {
-    problems.push("Day minimum hours add up to more than even three-at-a-time can hold. Lower some day minimums.");
   }
   const anchors = cfg.staff.filter((s) => s.anchor && s.side !== "night");
   if (anchors.length === 0) {
@@ -380,14 +376,17 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number, relaxed: bool
       // whole-night swaps
       if (!done && s.side !== "day") {
         for (let d = 0; d < DAYS && !done; d++) {
-          if (!canNight(e, d)) continue;
           for (let o = 0; o < n; o++) {
             if (o === e || !assign[o][d][3]) continue;
             if (blocksOf[o] - 3 < bnd[o].minBlocks) continue;
+            // Lift the occupant first, then see if the swap is legal.
             removeNight(o, d);
-            placeNight(e, d);
-            changed = true; done = true;
-            break;
+            if (canNight(e, d)) {
+              placeNight(e, d);
+              changed = true; done = true;
+              break;
+            }
+            placeNight(o, d);
           }
         }
       }
@@ -395,7 +394,6 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number, relaxed: bool
       if (!done && s.side !== "night") {
         for (let d = 0; d < DAYS && !done; d++) {
           for (let b = 0; b < 3 && !done; b++) {
-            if (!canDayBlock(e, d, b)) continue;
             for (let o = 0; o < n; o++) {
               if (o === e || !assign[o][d][b]) continue;
               if (blocksOf[o] <= bnd[o].minBlocks) continue;
@@ -408,10 +406,14 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number, relaxed: bool
                 }
                 if (!otherAnchor) continue;
               }
+              // Lift the occupant first, then see if the swap is legal.
               removeDay(o, d, b);
-              placeDay(e, d, b);
-              changed = true; done = true;
-              break;
+              if (canDayBlock(e, d, b)) {
+                placeDay(e, d, b);
+                changed = true; done = true;
+                break;
+              }
+              placeDay(o, d, b);
             }
           }
         }
