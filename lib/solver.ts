@@ -138,7 +138,8 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
         if (sa !== sz) return sa - sz;
         return rand() - 0.5;
       });
-      placeNight(pool[0], d);
+      const nPick = pool.length > 1 && rand() < 0.35 ? 1 : 0;
+      placeNight(pool[Math.min(nPick, pool.length - 1)], d);
       have++;
     }
   }
@@ -159,15 +160,17 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
           const ca = dayRun(a, d).length > 0 ? 0 : 1;      // keep stretches whole
           const cz = dayRun(z, d).length > 0 ? 0 : 1;
           if (ca !== cz) return ca - cz;
-          const pa = cfg.staff[a].primary ? 0 : 1;         // primaries come first
+          const da = blocksOf[a] - bnd[a].minBlocks;       // spread work by need first,
+          const dz = blocksOf[z] - bnd[z].minBlocks;       // so anchors last the week
+          if (da !== dz) return da - dz;
+          const pa = cfg.staff[a].primary ? 0 : 1;
           const pz = cfg.staff[z].primary ? 0 : 1;
           if (pa !== pz) return pa - pz;
-          const da = blocksOf[a] - bnd[a].minBlocks;
-          const dz = blocksOf[z] - bnd[z].minBlocks;
-          if (da !== dz) return da - dz;
           return rand() - 0.5;
         });
-        placeDay(pool[0], d, b);
+        // A little variety between attempts finds ways out of tight corners.
+        const pick = pool.length > 1 && rand() < 0.35 ? 1 : 0;
+        placeDay(pool[Math.min(pick, pool.length - 1)], d, b);
         if (slotCount(d, b) >= FLOOR && anchorOn(d, b)) break;
       }
     }

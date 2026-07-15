@@ -410,3 +410,7 @@ input:focus, select:focus { outline: 2px solid var(--seal); outline-offset: 1px;
   .noprint, .noprint * { display: none !important; visibility: hidden !important; }
   .weekband { page-break-inside: avoid; }
 }
+
+/* Clean single-line request rows */
+.reqgrid { display: grid; grid-template-columns: 64px 1fr 118px 26px; gap: 6px; align-items: center; }
+.reqgrid select, .reqgrid input { padding: 8px 6px; font-size: 12px; }

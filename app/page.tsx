@@ -126,15 +126,11 @@ export default function Page() {
   const [monthPick, setMonthPick] = useState("2026-08");
   const [staff, setStaff] = useState<RosterRow[]>(DEFAULT_ROSTER);
   const [adminReqs, setAdminReqs] = useState<AdminRequest[]>([]);
-  const [portalReqs, setPortalReqs] = useState<AdminRequest[]>([]);
-  const [adminPin, setAdminPin] = useState("0000");
   const [results, setResults] = useState<WeekResult[] | null>(null);
   const [genError, setGenError] = useState<string[]>([]);
   const [log, setLog] = useState<LoggedWeek[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [saveNote, setSaveNote] = useState("");
-  const [syncNote, setSyncNote] = useState("");
-  const [storageWarn, setStorageWarn] = useState(false);
 
   useEffect(() => {
     try {
@@ -169,14 +165,14 @@ export default function Page() {
       }
       const l = localStorage.getItem(LOG_KEY);
       if (l) { const p = JSON.parse(l); if (Array.isArray(p)) setLog(p); }
-      const a = localStorage.getItem(ADMIN_KEY);
-      if (a) setAdminPin(JSON.parse(a).adminPin || "0000");
+      const q = localStorage.getItem("sa_reqs_v1");
+      if (q) { const pr = JSON.parse(q); if (Array.isArray(pr)) setAdminReqs(pr); }
     } catch {}
     setLoaded(true);
   }, []);
   useEffect(() => { if (loaded) try { localStorage.setItem(ROSTER_KEY, JSON.stringify(staff)); } catch {} }, [staff, loaded]);
   useEffect(() => { if (loaded) try { localStorage.setItem(LOG_KEY, JSON.stringify(log)); } catch {} }, [log, loaded]);
-  useEffect(() => { if (loaded) try { localStorage.setItem(ADMIN_KEY, JSON.stringify({ adminPin })); } catch {} }, [adminPin, loaded]);
+  useEffect(() => { if (loaded) try { localStorage.setItem("sa_reqs_v1", JSON.stringify(adminReqs)); } catch {} }, [adminReqs, loaded]);
 
   // The date range being scheduled.
   const range = useMemo(() => {
@@ -190,48 +186,6 @@ export default function Page() {
     while (cur <= monthEnd) { weeks.push(cur); cur = addDaysISO(cur, 7); }
     return { from: first, weeks };
   }, [mode, weekStart, monthPick]);
-
-  const hdrs = useMemo(() => ({ "x-id": "SM", "x-pin": adminPin }), [adminPin]);
-
-  // Pull the staff-submitted requests for the period being built.
-  async function refreshPortal() {
-    setSyncNote("");
-    try {
-      const from = range.weeks[0];
-      const to = addDaysISO(range.weeks[range.weeks.length - 1], 6);
-      const res = await fetch(`/api/requests?from=${from}&to=${to}`, { headers: hdrs });
-      const data = await res.json();
-      if (data.ok) {
-        setPortalReqs(data.requests.map((r: AdminRequest) => ({ ...r, source: "portal" as const })));
-        setSyncNote(`${data.requests.length} staff request${data.requests.length === 1 ? "" : "s"} loaded for this period.`);
-        setStorageWarn(data.persistent === false);
-      } else {
-        setSyncNote("Could not load staff requests: " + (data.error || "sign-in failed") + ". Check the admin PIN on the Staff tab.");
-      }
-    } catch {
-      setSyncNote("Could not reach the request service.");
-    }
-  }
-  useEffect(() => { if (loaded) refreshPortal(); /* eslint-disable-next-line */ }, [loaded, mode, weekStart, monthPick]);
-
-  async function publishStaff() {
-    setSyncNote("");
-    try {
-      const res = await fetch("/api/staff", {
-        method: "PUT", headers: { "Content-Type": "application/json", ...hdrs },
-        body: JSON.stringify({ staff: staff.map((s) => ({ id: s.id, name: s.name, pin: s.pin })), adminPin }),
-      });
-      const data = await res.json();
-      setSyncNote(data.ok
-        ? (data.persistent ? "Published. Staff can now sign in at /portal with these PINs." : "Published to this deployment. Note: no database is connected yet, so portal data resets on redeploy. Connect a KV database in Vercel (Storage tab) to make it permanent.")
-        : "Publish failed: " + (data.error || ""));
-    } catch { setSyncNote("Could not reach the staff service."); }
-  }
-
-  async function removePortalReq(key: string) {
-    await fetch(`/api/requests?key=${encodeURIComponent(key)}`, { method: "DELETE", headers: hdrs });
-    refreshPortal();
-  }
 
   function updateStaff(i: number, patch: Partial<RosterRow>) {
     setStaff((s) => s.map((row, k) => (k === i ? { ...row, ...patch } : row)));
@@ -255,7 +209,7 @@ export default function Page() {
     setSaveNote(""); setGenError([]);
     try {
     const cleanStaff = rowsToStaff(staff);
-    const allReqs = [...portalReqs, ...adminReqs];
+    const allReqs = adminReqs;
     const out: WeekResult[] = [];
     const carryNights = new Array(cleanStaff.length).fill(0);
     const carryWeekends = new Array(cleanStaff.length).fill(0);
@@ -326,7 +280,7 @@ export default function Page() {
   }, [staff]);
   const selectAll = (e: React.FocusEvent<HTMLInputElement>) => e.target.select();
 
-  const periodReqs = [...portalReqs, ...adminReqs].sort((a, b) => a.date.localeCompare(b.date));
+  const periodReqs = [...adminReqs].sort((a, b) => a.date.localeCompare(b.date));
 
   return (
     <div className="wrap">
@@ -338,7 +292,7 @@ export default function Page() {
         <div className="meta">
           <span className="big">{mode === "week" ? weekLabel(weekStart) : monthPick}</span>
           <br />
-          at least two on, around the clock · nights always 8p to 8a · every day hour anchored
+          at least two on, around the clock · nights always 8p to 8a
         </div>
       </div>
       <div className="tabs">
@@ -350,8 +304,7 @@ export default function Page() {
 
       {tab === "staff" && (
         <StaffView staff={staff} colorIndex={colorIndex} log={log}
-          onUpdate={updateStaff} onRemove={removeStaff} onAdd={addStaff}
-          adminPin={adminPin} setAdminPin={setAdminPin} onPublish={publishStaff} syncNote={syncNote} />
+          onUpdate={updateStaff} onRemove={removeStaff} onAdd={addStaff} />
       )}
 
       {tab === "ledger" && <LedgerView log={log} staff={staff} colorIndex={colorIndex} onDelete={deleteWeek} />}
@@ -375,40 +328,24 @@ export default function Page() {
           </div>
 
           <div className="panel">
-            <h2>Time Off · This Period</h2>
-            <div className="syncrow">
-              <button className="addrow" style={{ width: "auto", padding: "8px 14px" }} onClick={refreshPortal}>↻ Load staff requests</button>
-            </div>
-            {syncNote && <p className="covnote">{syncNote}</p>}
-            {storageWarn && <div className="problem">The request database is not connected yet, so staff portal submissions cannot be stored. In Vercel: open your project, Storage tab, Create Database, pick KV (Upstash Redis), connect it, then redeploy. Time off you add here yourself still works fine.</div>}
-            {periodReqs.length === 0 && <p className="covnote" style={{ marginTop: 8 }}>No requests loaded for this period.</p>}
+            <h2>Time Off Requests</h2>
+            {periodReqs.length === 0 && <p className="covnote">None yet. Add a person, the date, and what they need off.</p>}
             {periodReqs.map((r) => (
               <div className="reqblock" key={r.key}>
-                <div className="reqrow4">
-                  {r.source === "admin" ? (
-                    <>
-                      <select value={r.id} onChange={(e) => updateAdminReq(r.key, { id: e.target.value })}>
-                        {staff.map((s, k) => <option key={k} value={s.id}>{s.id}</option>)}
-                      </select>
-                      <input type="date" value={r.date} onChange={(e) => updateAdminReq(r.key, { date: e.target.value })} />
-                      <select value={r.kind} onChange={(e) => updateAdminReq(r.key, { kind: e.target.value as AdminRequest["kind"] })}>
-                        <option value="all">all day</option>
-                        <option value="day">day shift</option>
-                        <option value="night">night shift</option>
-                        <option value="custom">custom hours</option>
-                      </select>
-                      <button className="rowdrop" onClick={() => removeAdminReq(r.key)}>×</button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="reqtag">{r.id}</span>
-                      <span className="reqinfo">{prettyDate(r.date)} · {r.kind === "custom" ? `${fmtClock(r.from)}–${fmtClock(r.to)}` : r.kind === "all" ? "whole day" : r.kind + " shift"} · from portal</span>
-                      <span />
-                      <button className="rowdrop" onClick={() => removePortalReq(r.key)}>×</button>
-                    </>
-                  )}
+                <div className="reqgrid">
+                  <select value={r.id} onChange={(e) => updateAdminReq(r.key, { id: e.target.value })}>
+                    {staff.map((s, k) => <option key={k} value={s.id}>{s.id}</option>)}
+                  </select>
+                  <input type="date" value={r.date} onChange={(e) => updateAdminReq(r.key, { date: e.target.value })} />
+                  <select value={r.kind} onChange={(e) => updateAdminReq(r.key, { kind: e.target.value as AdminRequest["kind"] })}>
+                    <option value="all">all day</option>
+                    <option value="day">day shift</option>
+                    <option value="night">night shift</option>
+                    <option value="custom">custom hours</option>
+                  </select>
+                  <button className="rowdrop" onClick={() => removeAdminReq(r.key)}>×</button>
                 </div>
-                {r.source === "admin" && r.kind === "custom" && (
+                {r.kind === "custom" && (
                   <div className="reqtimes">
                     <input type="time" value={r.from} onChange={(e) => updateAdminReq(r.key, { from: e.target.value })} />
                     <span>to</span>
@@ -417,7 +354,7 @@ export default function Page() {
                 )}
               </div>
             ))}
-            <button className="addrow" onClick={addAdminReq}>+ Add time off myself</button>
+            <button className="addrow" onClick={addAdminReq}>+ Add time off</button>
           </div>
 
           <button className="generate" onClick={generate}>
@@ -548,11 +485,10 @@ function PeriodHours({ results, colorIndex }: { results: WeekResult[]; colorInde
 }
 
 function StaffView({
-  staff, colorIndex, log, onUpdate, onRemove, onAdd, adminPin, setAdminPin, onPublish, syncNote,
+  staff, colorIndex, log, onUpdate, onRemove, onAdd,
 }: {
   staff: RosterRow[]; colorIndex: Record<string, number>; log: LoggedWeek[];
   onUpdate: (i: number, p: Partial<RosterRow>) => void; onRemove: (i: number) => void; onAdd: () => void;
-  adminPin: string; setAdminPin: (p: string) => void; onPublish: () => void; syncNote: string;
 }) {
   const selectAll = (e: React.FocusEvent<HTMLInputElement>) => e.target.select();
   const sorted = [...log].sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
@@ -562,16 +498,10 @@ function StaffView({
   return (
     <div>
       <div className="panel">
-        <h2>Admin · Sandy Murphy</h2>
-        <div className="adminrow">
-          <div className="field" style={{ margin: 0 }}><label>Admin sign-in: SM · PIN</label>
-            <input type="text" value={adminPin} onFocus={selectAll} onChange={(e) => setAdminPin(e.target.value)} style={{ width: 90 }} /></div>
-          <button className="addrow" style={{ width: "auto", padding: "10px 16px" }} onClick={onPublish}>Publish staff logins to the portal</button>
-        </div>
-        <p className="covnote">Staff sign in at <b>/portal</b> with their initials and PIN to submit next month&apos;s requests. Publish after changing names or PINs.</p>
-        {syncNote && <p className="covnote">{syncNote}</p>}
-        <button className="rowdrop" style={{ marginTop: 10, fontSize: 11, letterSpacing: 1 }}
-          onClick={() => { if (confirm("Reset all app data on this device? Roster, ledger, and settings return to defaults.")) { localStorage.clear(); location.reload(); } }}>
+        <h2>Staff Settings</h2>
+        <p className="covnote">Everything about each person lives here: who they are, what they can work, and their hours. Changes save on this device automatically.</p>
+        <button className="rowdrop" style={{ marginTop: 6, fontSize: 11, letterSpacing: 1 }}
+          onClick={() => { if (confirm("Reset all app data on this device? Roster, ledger, requests, and settings return to defaults.")) { localStorage.clear(); location.reload(); } }}>
           × Reset app data on this device
         </button>
       </div>
@@ -613,8 +543,6 @@ function StaffView({
                   onChange={(e) => onUpdate(i, { primary: e.target.value === "yes" })}>
                   <option value="no">no</option><option value="yes">yes</option>
                 </select></div>
-              <div className="field"><label>Portal PIN</label>
-                <input type="text" value={row.pin} onFocus={selectAll} onChange={(e) => onUpdate(i, { pin: e.target.value })} /></div>
               <div className="field"><label>Target h</label>
                 <input type="text" inputMode="numeric" value={row.pref} onFocus={selectAll}
                   onChange={(e) => onUpdate(i, { pref: e.target.value.replace(/[^0-9]/g, "") })} /></div>
