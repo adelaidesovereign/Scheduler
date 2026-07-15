@@ -11,11 +11,20 @@ const isDaySide = (b: number) => b < 3;
 interface Bounds { minBlocks: number; maxBlocks: number; prefBlocks: number; }
 
 function bounds(staff: Staff[]): Bounds[] {
-  return staff.map((s) => ({
-    minBlocks: Math.ceil(s.min / BLOCK_HOURS),
-    maxBlocks: Math.min(Math.floor(s.max / BLOCK_HOURS), DAYS * 3),
-    prefBlocks: Math.round(s.pref / BLOCK_HOURS),
-  }));
+  return staff.map((s) => {
+    if (s.side === "night") {
+      // Nights are whole 8p-8a shifts, so night hours round to whole nights.
+      const minN = Math.max(0, Math.round(s.min / 12));
+      const maxN = Math.max(minN, Math.floor(s.max / 12) || minN);
+      const prefN = Math.min(Math.max(Math.round(s.pref / 12), minN), maxN);
+      return { minBlocks: minN * 3, maxBlocks: Math.min(maxN * 3, DAYS * 3), prefBlocks: prefN * 3 };
+    }
+    return {
+      minBlocks: Math.ceil(s.min / BLOCK_HOURS),
+      maxBlocks: Math.min(Math.floor(s.max / BLOCK_HOURS), DAYS * 3),
+      prefBlocks: Math.round(s.pref / BLOCK_HOURS),
+    };
+  });
 }
 
 function validate(cfg: Config): string[] {
@@ -30,12 +39,11 @@ function validate(cfg: Config): string[] {
       problems.push(`${ids[i]} has minimum hours above what their maximum allows in a week.`);
     }
   });
-  // Night staff work in whole nights, so their hours are multiples of 12.
-  cfg.staff.forEach((s) => {
-    if (s.side === "night" && (s.min % 12 !== 0 || s.max % 12 !== 0)) {
-      problems.push(`${s.id} is night-only, and nights are always full 8p-8a shifts, so their Min and Max must be multiples of 12.`);
-    }
-  });
+  // Anchors must be able to cover every day hour: 21 day blocks a week.
+  const anchorCap = cfg.staff.reduce((a, s, i) => a + (s.anchor && s.side !== "night" ? b[i].maxBlocks : 0), 0);
+  if (anchorCap < DAYS * 3) {
+    problems.push("Your day leads (anchors) cannot cover every day hour of the week between them. Raise an anchor's Max hours or mark another day person as an anchor.");
+  }
   // Day-side capacity: 21 day-block slots x 2 = 168 hours must come from day-capable staff.
   const dayCap = cfg.staff.reduce((a, s, i) => a + (s.side !== "night" ? b[i].maxBlocks : 0), 0);
   if (dayCap * BLOCK_HOURS < DAYS * 3 * FLOOR * BLOCK_HOURS) {

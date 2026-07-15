@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authenticate, getOrg, saveOrg, PortalRequest } from "@/lib/store";
+import { authenticate, getOrg, saveOrg, kvConfigured, PortalRequest } from "@/lib/store";
 
 async function auth(req: NextRequest) {
   const id = req.headers.get("x-id") || "";
@@ -15,12 +15,15 @@ export async function GET(req: NextRequest) {
   const to = req.nextUrl.searchParams.get("to") || "9999-99-99";
   let list = org.requests.filter((r) => r.date >= from && r.date <= to);
   if (a.role === "staff") list = list.filter((r) => r.id === a.id);
-  return NextResponse.json({ ok: true, requests: list });
+  return NextResponse.json({ ok: true, requests: list, persistent: kvConfigured() || !process.env.VERCEL });
 }
 
 export async function POST(req: NextRequest) {
   const a = await auth(req);
   if (!a.role) return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
+  if (process.env.VERCEL && !kvConfigured()) {
+    return NextResponse.json({ ok: false, error: "The request database is not connected yet, so this cannot be saved. Ask the admin to connect a KV database in Vercel and redeploy." }, { status: 503 });
+  }
   const body = await req.json();
   const target = a.role === "admin" ? String(body.id || "").toUpperCase() : a.id;
   if (!target) return NextResponse.json({ ok: false, error: "Missing staff id." }, { status: 400 });

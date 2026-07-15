@@ -134,13 +134,21 @@ export default function Page() {
   const [loaded, setLoaded] = useState(false);
   const [saveNote, setSaveNote] = useState("");
   const [syncNote, setSyncNote] = useState("");
+  const [storageWarn, setStorageWarn] = useState(false);
 
   useEffect(() => {
     try {
       const r = localStorage.getItem(ROSTER_KEY);
       if (r) {
         const parsed = JSON.parse(r);
-        if (Array.isArray(parsed) && parsed.length) setStaff(parsed);
+        if (Array.isArray(parsed) && parsed.length) {
+          setStaff(parsed.map((x: Partial<RosterRow>) => ({
+            id: String(x.id || "??").toUpperCase(), name: x.name || "", pin: x.pin || "1111", notes: x.notes || "",
+            side: (x.side as Side) || "day", empType: x.empType === "FT" ? "FT" : "PT",
+            anchor: Boolean(x.anchor), primary: Boolean(x.primary), stretch: x.stretch === "12" ? "12" : "8",
+            pref: x.pref || "24", min: x.min || "12", max: x.max || "36",
+          })));
+        }
       } else {
         const old = localStorage.getItem("sa_roster_v1");
         if (old) {
@@ -196,6 +204,7 @@ export default function Page() {
       if (data.ok) {
         setPortalReqs(data.requests.map((r: AdminRequest) => ({ ...r, source: "portal" as const })));
         setSyncNote(`${data.requests.length} staff request${data.requests.length === 1 ? "" : "s"} loaded for this period.`);
+        setStorageWarn(data.persistent === false);
       } else {
         setSyncNote("Could not load staff requests: " + (data.error || "sign-in failed") + ". Check the admin PIN on the Staff tab.");
       }
@@ -244,6 +253,7 @@ export default function Page() {
 
   function generate() {
     setSaveNote(""); setGenError([]);
+    try {
     const cleanStaff = rowsToStaff(staff);
     const allReqs = [...portalReqs, ...adminReqs];
     const out: WeekResult[] = [];
@@ -283,6 +293,10 @@ export default function Page() {
       });
     }
     setResults(out);
+    } catch (err) {
+      setGenError(["The engine hit an unexpected error: " + String(err) + ". If this keeps happening, use Reset app data on the Staff tab and re-enter your roster."]);
+      setResults(null);
+    }
   }
 
   function logAll() {
@@ -366,6 +380,7 @@ export default function Page() {
               <button className="addrow" style={{ width: "auto", padding: "8px 14px" }} onClick={refreshPortal}>↻ Load staff requests</button>
             </div>
             {syncNote && <p className="covnote">{syncNote}</p>}
+            {storageWarn && <div className="problem">The request database is not connected yet, so staff portal submissions cannot be stored. In Vercel: open your project, Storage tab, Create Database, pick KV (Upstash Redis), connect it, then redeploy. Time off you add here yourself still works fine.</div>}
             {periodReqs.length === 0 && <p className="covnote" style={{ marginTop: 8 }}>No requests loaded for this period.</p>}
             {periodReqs.map((r) => (
               <div className="reqblock" key={r.key}>
@@ -555,6 +570,10 @@ function StaffView({
         </div>
         <p className="covnote">Staff sign in at <b>/portal</b> with their initials and PIN to submit next month&apos;s requests. Publish after changing names or PINs.</p>
         {syncNote && <p className="covnote">{syncNote}</p>}
+        <button className="rowdrop" style={{ marginTop: 10, fontSize: 11, letterSpacing: 1 }}
+          onClick={() => { if (confirm("Reset all app data on this device? Roster, ledger, and settings return to defaults.")) { localStorage.clear(); location.reload(); } }}>
+          × Reset app data on this device
+        </button>
       </div>
 
       {staff.map((row, i) => {
