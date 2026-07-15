@@ -1,224 +1,306 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { solve, summarize, DAYS, BLOCKS, BLOCK_HOURS, FLOOR } from "@/lib/solver";
-import { Config, Lean, Staff, BlockOff } from "@/lib/types";
+import { solve, summarize, DAYS, BLOCKS } from "@/lib/solver";
+import { Config, Side, Staff, BlockOff } from "@/lib/types";
 
 const PALETTE = [
   "#F4C6DA", "#D8C6F0", "#FBE39A", "#F7CB98", "#F4A6A6", "#9BE5EE",
   "#BFE0F6", "#F3E4B4", "#C9E7BC", "#F1B9CA", "#C9D6F0", "#E8D2B2",
 ];
 const colorFor = (i: number) => PALETTE[i % PALETTE.length];
-const DAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const OT_THRESHOLD = 40;
-const ROSTER_KEY = "sa_roster_v1";
+const ROSTER_KEY = "sa_roster_v3";
 const LOG_KEY = "sa_hourslog_v1";
+const ADMIN_KEY = "sa_admin_v1";
 
-// Six 4-hour blocks per operational day. Blocks 4 and 5 live in the next
-// calendar morning but belong to this day's night shift.
-const BLOCK_LABEL = ["8a–12p", "12p–4p", "4p–8p", "8p–12a", "12a–4a", "4a–8a"];
-
-interface RosterRow { id: string; name: string; pref: string; min: string; max: string; lean: Lean; }
-
-interface Request {
-  id: string;
-  day: number;
-  kind: "all" | "day" | "night" | "custom";
-  from: string;
-  to: string;
+interface RosterRow {
+  id: string; name: string; pin: string; notes: string;
+  side: Side; empType: "FT" | "PT"; anchor: boolean; primary: boolean; stretch: "8" | "12";
+  pref: string; min: string; max: string;
 }
-
-interface LoggedWeek {
-  weekStart: string;
-  hours: Record<string, number>;
-  names: Record<string, string>;
-  savedAt: string;
+interface AdminRequest {
+  key: string; id: string; date: string;
+  kind: "all" | "day" | "night" | "custom"; from: string; to: string;
+  source: "admin" | "portal";
 }
+interface LoggedWeek { weekStart: string; hours: Record<string, number>; names: Record<string, string>; savedAt: string; }
+interface WeekResult { weekStart: string; cfg: Config; result: ReturnType<typeof solve>; }
 
-const START_ROSTER: RosterRow[] = [
-  { id: "CT", name: "", pref: "36", min: "24", max: "48", lean: "day" },
-  { id: "CM", name: "", pref: "24", min: "12", max: "36", lean: "day" },
-  { id: "AT", name: "", pref: "36", min: "24", max: "48", lean: "day" },
-  { id: "AD", name: "", pref: "36", min: "24", max: "48", lean: "any" },
-  { id: "KH", name: "", pref: "24", min: "12", max: "36", lean: "day" },
-  { id: "EH", name: "", pref: "36", min: "24", max: "48", lean: "night" },
-  { id: "SL", name: "", pref: "36", min: "24", max: "48", lean: "night" },
-  { id: "WR", name: "", pref: "36", min: "24", max: "48", lean: "night" },
-  { id: "VT", name: "", pref: "24", min: "12", max: "36", lean: "night" },
-  { id: "R1", name: "", pref: "24", min: "12", max: "36", lean: "any" },
-  { id: "R2", name: "", pref: "24", min: "12", max: "36", lean: "any" },
-  { id: "R3", name: "", pref: "24", min: "12", max: "36", lean: "any" },
+const DEFAULT_ROSTER: RosterRow[] = [
+  { id: "AT", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "36", min: "36", max: "48" },
+  { id: "CT", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "36", min: "36", max: "48" },
+  { id: "CM", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: false, stretch: "12", pref: "32", min: "24", max: "40" },
+  { id: "AD", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "32", min: "24", max: "40" },
+  { id: "KH", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "24", min: "16", max: "32" },
+  { id: "WR", name: "", pin: "1111", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48" },
+  { id: "EH", name: "", pin: "1111", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48" },
+  { id: "SL", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36" },
+  { id: "VT", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36" },
+  { id: "YN", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36" },
 ];
 
-function toNum(v: string, fallback = 0): number {
+// Rules for known initials, used when migrating an older saved roster.
+const KNOWN: Record<string, Partial<RosterRow>> = Object.fromEntries(
+  DEFAULT_ROSTER.map((r) => [r.id, { side: r.side, empType: r.empType, anchor: r.anchor, primary: r.primary, stretch: r.stretch }])
+);
+
+function toNum(v: string, fb = 0): number {
   const n = parseInt(v, 10);
-  if (Number.isNaN(n) || n < 0) return fallback;
+  if (Number.isNaN(n) || n < 0) return fb;
   return Math.min(n, 96);
+}
+function addDaysISO(iso: string, n: number): string {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function dowOf(iso: string): number { return new Date(iso + "T00:00:00").getDay(); }
+function prettyDate(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  return `${DOW[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`;
+}
+function weekLabel(iso: string): string {
+  const opt: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+  return `${new Date(iso + "T00:00:00").toLocaleDateString("en-US", opt)} to ${new Date(addDaysISO(iso, 6) + "T00:00:00").toLocaleDateString("en-US", opt)}`;
 }
 function fmtClock(t: string): string {
   const [hs, ms] = t.split(":");
   let h = parseInt(hs, 10);
-  const suffix = h < 12 ? "a" : "p";
+  const suf = h < 12 ? "a" : "p";
   h = h % 12; if (h === 0) h = 12;
-  return ms === "00" ? `${h}${suffix}` : `${h}:${ms}${suffix}`;
+  return ms === "00" ? `${h}${suf}` : `${h}:${ms}${suf}`;
 }
-function addDays(iso: string, n: number): Date {
-  const d = new Date(iso + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return d;
-}
-function weekLabel(iso: string): string {
-  const a = addDays(iso, 0), b = addDays(iso, 6);
-  const opt: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
-  return `${a.toLocaleDateString("en-US", opt)} to ${b.toLocaleDateString("en-US", opt)}`;
+function diffDays(a: string, b: string): number {
+  return Math.round((new Date(a + "T00:00:00").getTime() - new Date(b + "T00:00:00").getTime()) / 86400000);
 }
 
-// Turn requests into 4-hour holds. A custom window touches only the blocks it
-// overlaps: an 8a-12p appointment holds just the morning, so that person can
-// still work 12p-8p the same day if their hours need it.
-function expandRequests(reqs: Request[]): BlockOff[] {
+// Date-based requests to 4-hour holds for one week. Overnight windows
+// (like 8p to 8a) wrap correctly instead of being dropped.
+function requestsToBlocks(reqs: AdminRequest[], weekStart: string): BlockOff[] {
   const out: BlockOff[] = [];
   const push = (id: string, day: number, block: number) => {
     if (day >= 0 && day < DAYS) out.push({ id, day, block });
   };
+  const mapWindow = (id: string, date: string, f: number, t: number) => {
+    const di = diffDays(date, weekStart);
+    const ov = (a1: number, a2: number, b1: number, b2: number) => a1 < b2 && b1 < a2;
+    if (ov(f, t, 8, 12)) push(id, di, 0);
+    if (ov(f, t, 12, 16)) push(id, di, 1);
+    if (ov(f, t, 16, 20)) push(id, di, 2);
+    if (ov(f, t, 20, 24)) push(id, di, 3);
+    if (ov(f, t, 0, 4)) push(id, di - 1, 4);
+    if (ov(f, t, 4, 8)) push(id, di - 1, 5);
+  };
   for (const r of reqs) {
-    if (r.kind === "all") { for (let b = 0; b < BLOCKS; b++) push(r.id, r.day, b); continue; }
-    if (r.kind === "day") { push(r.id, r.day, 0); push(r.id, r.day, 1); push(r.id, r.day, 2); continue; }
-    if (r.kind === "night") { push(r.id, r.day, 3); push(r.id, r.day, 4); push(r.id, r.day, 5); continue; }
-    const from = parseInt(r.from.split(":")[0], 10) + parseInt(r.from.split(":")[1], 10) / 60;
-    const to = parseInt(r.to.split(":")[0], 10) + parseInt(r.to.split(":")[1], 10) / 60;
-    if (!(to > from)) continue;
-    const overlaps = (a1: number, a2: number, b1: number, b2: number) => a1 < b2 && b1 < a2;
-    if (overlaps(from, to, 8, 12)) push(r.id, r.day, 0);
-    if (overlaps(from, to, 12, 16)) push(r.id, r.day, 1);
-    if (overlaps(from, to, 16, 20)) push(r.id, r.day, 2);
-    if (overlaps(from, to, 20, 24)) push(r.id, r.day, 3);
-    if (overlaps(from, to, 0, 4)) push(r.id, r.day - 1, 4);
-    if (overlaps(from, to, 4, 8)) push(r.id, r.day - 1, 5);
+    const di = diffDays(r.date, weekStart);
+    if (di < -1 || di > DAYS) continue;
+    if (r.kind === "all") { for (let b = 0; b < BLOCKS; b++) push(r.id, di, b); continue; }
+    if (r.kind === "day") { push(r.id, di, 0); push(r.id, di, 1); push(r.id, di, 2); continue; }
+    if (r.kind === "night") { push(r.id, di, 3); push(r.id, di, 4); push(r.id, di, 5); continue; }
+    const f = parseInt(r.from.split(":")[0], 10) + parseInt(r.from.split(":")[1], 10) / 60;
+    const t = parseInt(r.to.split(":")[0], 10) + parseInt(r.to.split(":")[1], 10) / 60;
+    if (t > f) { mapWindow(r.id, r.date, f, t); }
+    else { mapWindow(r.id, r.date, f, 24); mapWindow(r.id, addDaysISO(r.date, 1), 0, t); }
   }
   return out;
 }
 
-function describeBlocks(bo: BlockOff[]): string {
-  if (!bo.length) return "nothing yet";
-  return bo.map((x) => BLOCK_LABEL[x.block]).join(" + ");
+function rowsToStaff(rows: RosterRow[]): Staff[] {
+  return rows.map((r) => ({
+    id: r.id.trim().toUpperCase() || "??",
+    name: r.name.trim(),
+    pref: toNum(r.pref), min: toNum(r.min), max: toNum(r.max),
+    side: r.side,
+    anchor: r.anchor && r.side !== "night",
+    primary: r.primary,
+    maxStretchBlocks: r.side === "night" ? 3 : (r.stretch === "12" ? 3 : 2),
+  }));
 }
 
 export default function Page() {
-  const [tab, setTab] = useState<"build" | "ledger">("build");
+  const [tab, setTab] = useState<"build" | "staff" | "ledger">("build");
+  const [mode, setMode] = useState<"week" | "month">("week");
   const [weekStart, setWeekStart] = useState("2026-07-17");
-  const [staff, setStaff] = useState<RosterRow[]>(START_ROSTER);
-  const [requests, setRequests] = useState<Request[]>([]);
-  const [result, setResult] = useState<ReturnType<typeof solve> | null>(null);
-  const [cfgUsed, setCfgUsed] = useState<Config | null>(null);
+  const [monthPick, setMonthPick] = useState("2026-08");
+  const [staff, setStaff] = useState<RosterRow[]>(DEFAULT_ROSTER);
+  const [adminReqs, setAdminReqs] = useState<AdminRequest[]>([]);
+  const [portalReqs, setPortalReqs] = useState<AdminRequest[]>([]);
+  const [adminPin, setAdminPin] = useState("0000");
+  const [results, setResults] = useState<WeekResult[] | null>(null);
+  const [genError, setGenError] = useState<string[]>([]);
   const [log, setLog] = useState<LoggedWeek[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [saveNote, setSaveNote] = useState("");
+  const [syncNote, setSyncNote] = useState("");
 
   useEffect(() => {
     try {
       const r = localStorage.getItem(ROSTER_KEY);
       if (r) {
         const parsed = JSON.parse(r);
-        if (Array.isArray(parsed) && parsed.length) {
-          setStaff(parsed.map((x: Partial<RosterRow>) => ({
-            id: x.id ?? "??", name: x.name ?? "", pref: x.pref ?? "24",
-            min: x.min ?? "12", max: x.max ?? "36", lean: x.lean ?? "any",
-          })));
+        if (Array.isArray(parsed) && parsed.length) setStaff(parsed);
+      } else {
+        const old = localStorage.getItem("sa_roster_v1");
+        if (old) {
+          const p = JSON.parse(old);
+          if (Array.isArray(p) && p.length) {
+            setStaff(p.map((x: { id?: string; name?: string; pref?: string; min?: string; max?: string }) => {
+              const id = String(x.id || "??").toUpperCase();
+              const k = KNOWN[id] || {};
+              return {
+                id, name: x.name || "", pin: "1111", notes: "",
+                side: (k.side as Side) || "day", empType: k.empType || "PT",
+                anchor: k.anchor ?? false, primary: k.primary ?? false, stretch: k.stretch || "8",
+                pref: x.pref || "24", min: x.min || "12", max: x.max || "36",
+              };
+            }));
+          }
         }
       }
       const l = localStorage.getItem(LOG_KEY);
-      if (l) {
-        const parsed = JSON.parse(l);
-        if (Array.isArray(parsed)) setLog(parsed);
-      }
+      if (l) { const p = JSON.parse(l); if (Array.isArray(p)) setLog(p); }
+      const a = localStorage.getItem(ADMIN_KEY);
+      if (a) setAdminPin(JSON.parse(a).adminPin || "0000");
     } catch {}
     setLoaded(true);
   }, []);
+  useEffect(() => { if (loaded) try { localStorage.setItem(ROSTER_KEY, JSON.stringify(staff)); } catch {} }, [staff, loaded]);
+  useEffect(() => { if (loaded) try { localStorage.setItem(LOG_KEY, JSON.stringify(log)); } catch {} }, [log, loaded]);
+  useEffect(() => { if (loaded) try { localStorage.setItem(ADMIN_KEY, JSON.stringify({ adminPin })); } catch {} }, [adminPin, loaded]);
 
-  useEffect(() => {
-    if (!loaded) return;
-    try { localStorage.setItem(ROSTER_KEY, JSON.stringify(staff)); } catch {}
-  }, [staff, loaded]);
+  // The date range being scheduled.
+  const range = useMemo(() => {
+    if (mode === "week") return { from: weekStart, weeks: [weekStart] };
+    const first = monthPick + "-01";
+    const weeks: string[] = [];
+    let cur = first;
+    const [y, m] = monthPick.split("-").map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const monthEnd = `${monthPick}-${String(lastDay).padStart(2, "0")}`;
+    while (cur <= monthEnd) { weeks.push(cur); cur = addDaysISO(cur, 7); }
+    return { from: first, weeks };
+  }, [mode, weekStart, monthPick]);
 
-  useEffect(() => {
-    if (!loaded) return;
-    try { localStorage.setItem(LOG_KEY, JSON.stringify(log)); } catch {}
-  }, [log, loaded]);
+  const hdrs = useMemo(() => ({ "x-id": "SM", "x-pin": adminPin }), [adminPin]);
 
-  const startDow = useMemo(() => new Date(weekStart + "T00:00:00").getDay(), [weekStart]);
-  const weekendDays = useMemo(() => {
-    const out: number[] = [];
-    for (let i = 0; i < DAYS; i++) {
-      const dow = (startDow + i) % 7;
-      if (dow === 0 || dow === 6) out.push(i);
+  // Pull the staff-submitted requests for the period being built.
+  async function refreshPortal() {
+    setSyncNote("");
+    try {
+      const from = range.weeks[0];
+      const to = addDaysISO(range.weeks[range.weeks.length - 1], 6);
+      const res = await fetch(`/api/requests?from=${from}&to=${to}`, { headers: hdrs });
+      const data = await res.json();
+      if (data.ok) {
+        setPortalReqs(data.requests.map((r: AdminRequest) => ({ ...r, source: "portal" as const })));
+        setSyncNote(`${data.requests.length} staff request${data.requests.length === 1 ? "" : "s"} loaded for this period.`);
+      } else {
+        setSyncNote("Could not load staff requests: " + (data.error || "sign-in failed") + ". Check the admin PIN on the Staff tab.");
+      }
+    } catch {
+      setSyncNote("Could not reach the request service.");
     }
-    return out;
-  }, [startDow]);
+  }
+  useEffect(() => { if (loaded) refreshPortal(); /* eslint-disable-next-line */ }, [loaded, mode, weekStart, monthPick]);
 
-  // Live math in hours, so nothing needs to be worked out by hand.
-  const capacity = useMemo(() => {
-    const floorHours = DAYS * BLOCKS * FLOOR * BLOCK_HOURS; // 336
-    let minH = 0, maxH = 0, prefH = 0;
-    for (const s of staff) { minH += toNum(s.min); maxH += toNum(s.max); prefH += toNum(s.pref); }
-    return { floorHours, minH, maxH, prefH };
-  }, [staff]);
+  async function publishStaff() {
+    setSyncNote("");
+    try {
+      const res = await fetch("/api/staff", {
+        method: "PUT", headers: { "Content-Type": "application/json", ...hdrs },
+        body: JSON.stringify({ staff: staff.map((s) => ({ id: s.id, name: s.name, pin: s.pin })), adminPin }),
+      });
+      const data = await res.json();
+      setSyncNote(data.ok
+        ? (data.persistent ? "Published. Staff can now sign in at /portal with these PINs." : "Published to this deployment. Note: no database is connected yet, so portal data resets on redeploy. Connect a KV database in Vercel (Storage tab) to make it permanent.")
+        : "Publish failed: " + (data.error || ""));
+    } catch { setSyncNote("Could not reach the staff service."); }
+  }
+
+  async function removePortalReq(key: string) {
+    await fetch(`/api/requests?key=${encodeURIComponent(key)}`, { method: "DELETE", headers: hdrs });
+    refreshPortal();
+  }
 
   function updateStaff(i: number, patch: Partial<RosterRow>) {
     setStaff((s) => s.map((row, k) => (k === i ? { ...row, ...patch } : row)));
   }
   function removeStaff(i: number) { setStaff((s) => s.filter((_, k) => k !== i)); }
   function addStaff() {
-    setStaff((s) => [...s, { id: "NEW", name: "", pref: "24", min: "12", max: "36", lean: "any" }]);
+    setStaff((s) => [...s, { id: "NEW", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "24", min: "12", max: "36" }]);
   }
-  function addRequest() {
-    setRequests((t) => [...t, { id: staff[0]?.id || "", day: 0, kind: "all", from: "08:00", to: "12:00" }]);
+  function addAdminReq() {
+    setAdminReqs((t) => [...t, {
+      key: "a" + Date.now() + Math.floor(Math.random() * 1e6),
+      id: staff[0]?.id || "", date: range.weeks[0], kind: "all", from: "08:00", to: "12:00", source: "admin",
+    }]);
   }
-  function updateRequest(i: number, patch: Partial<Request>) {
-    setRequests((t) => t.map((row, k) => (k === i ? { ...row, ...patch } : row)));
+  function updateAdminReq(k: string, patch: Partial<AdminRequest>) {
+    setAdminReqs((t) => t.map((r) => (r.key === k ? { ...r, ...patch } : r)));
   }
-  function removeRequest(i: number) { setRequests((t) => t.filter((_, k) => k !== i)); }
+  function removeAdminReq(k: string) { setAdminReqs((t) => t.filter((r) => r.key !== k)); }
 
   function generate() {
-    setSaveNote("");
-    const cleanStaff: Staff[] = staff.map((s) => ({
-      id: s.id.trim() || "??",
-      name: s.name.trim(),
-      pref: toNum(s.pref),
-      min: toNum(s.min),
-      max: toNum(s.max),
-      lean: s.lean,
-    }));
-    const cfg: Config = {
-      staff: cleanStaff,
-      blockOff: expandRequests(requests),
-      weights: { hours: 100, night: 8, weekend: 6, lean: 4, fragment: 3 },
-      weekendDays,
-      seed: Math.floor(Math.random() * 1e9),
-    };
-    setCfgUsed(cfg);
-    try {
-      setResult(solve(cfg, 400));
-    } catch (err) {
-      setResult({
-        status: "INVALID",
-        problems: ["Something in the inputs broke the engine: " + String(err) + ". Check for blank initials or hours and generate again."],
+    setSaveNote(""); setGenError([]);
+    const cleanStaff = rowsToStaff(staff);
+    const allReqs = [...portalReqs, ...adminReqs];
+    const out: WeekResult[] = [];
+    const carryNights = new Array(cleanStaff.length).fill(0);
+    const carryWeekends = new Array(cleanStaff.length).fill(0);
+    let extraOff: BlockOff[] = [];
+
+    for (const ws of range.weeks) {
+      const wd: number[] = [];
+      for (let i = 0; i < DAYS; i++) { const dw = dowOf(addDaysISO(ws, i)); if (dw === 0 || dw === 6) wd.push(i); }
+      const cfg: Config = {
+        staff: cleanStaff,
+        blockOff: [...requestsToBlocks(allReqs, ws), ...extraOff],
+        weights: { hours: 100, night: 8, weekend: 6, fragment: 3 },
+        weekendDays: wd,
+        carryNights: [...carryNights],
+        carryWeekends: [...carryWeekends],
+        seed: Math.floor(Math.random() * 1e9),
+      };
+      let res: ReturnType<typeof solve>;
+      try { res = solve(cfg, mode === "month" ? 350 : 450); }
+      catch (err) { res = { status: "INVALID", problems: ["Engine error: " + String(err)] }; }
+      out.push({ weekStart: ws, cfg, result: res });
+      if (res.status !== "OK") {
+        setGenError([`Week of ${weekLabel(ws)} could not be scheduled.`, ...res.problems]);
+        break;
+      }
+      // Fairness and rest carry into the next week.
+      const stats = summarize(cfg, res.sol);
+      extraOff = [];
+      cleanStaff.forEach((s, e) => {
+        carryNights[e] += stats.nights[s.id];
+        carryWeekends[e] += stats.weekends[s.id];
+        if (res.status === "OK" && res.sol.assign[e][DAYS - 1][3]) {
+          extraOff.push({ id: s.id, day: 0, block: 0 }, { id: s.id, day: 0, block: 1 }, { id: s.id, day: 0, block: 2 });
+        }
       });
     }
+    setResults(out);
   }
 
-  function logWeek() {
-    if (!result || result.status !== "OK" || !cfgUsed) return;
-    const stats = summarize(cfgUsed, result.sol);
-    const names: Record<string, string> = {};
-    for (const s of cfgUsed.staff) names[s.id] = s.name || "";
-    const entry: LoggedWeek = { weekStart, hours: stats.hours, names, savedAt: new Date().toISOString() };
+  function logAll() {
+    if (!results) return;
+    const good = results.filter((w) => w.result.status === "OK");
     setLog((l) => {
-      const others = l.filter((w) => w.weekStart !== weekStart);
-      return [...others, entry].sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
+      let next = [...l];
+      for (const w of good) {
+        if (w.result.status !== "OK") continue;
+        const stats = summarize(w.cfg, w.result.sol);
+        const names: Record<string, string> = {};
+        for (const s of w.cfg.staff) names[s.id] = s.name || "";
+        next = next.filter((x) => x.weekStart !== w.weekStart);
+        next.push({ weekStart: w.weekStart, hours: stats.hours, names, savedAt: new Date().toISOString() });
+      }
+      return next.sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
     });
-    setSaveNote(`Week of ${weekLabel(weekStart)} saved to the ledger.`);
+    setSaveNote(`${good.length} week${good.length === 1 ? "" : "s"} saved to the hours ledger.`);
   }
 
   function deleteWeek(ws: string) { setLog((l) => l.filter((w) => w.weekStart !== ws)); }
@@ -228,9 +310,9 @@ export default function Page() {
     staff.forEach((s, i) => (m[s.id] = i));
     return m;
   }, [staff]);
-
   const selectAll = (e: React.FocusEvent<HTMLInputElement>) => e.target.select();
-  const capBad = capacity.maxH < capacity.floorHours;
+
+  const periodReqs = [...portalReqs, ...adminReqs].sort((a, b) => a.date.localeCompare(b.date));
 
   return (
     <div className="wrap">
@@ -240,16 +322,23 @@ export default function Page() {
           <h1>Schedule Automator</h1>
         </div>
         <div className="meta">
-          <span className="big">{weekLabel(weekStart)}</span>
+          <span className="big">{mode === "week" ? weekLabel(weekStart) : monthPick}</span>
           <br />
-          at least two on the floor, around the clock · staffing adjusts itself to hours and requests
+          at least two on, around the clock · nights always 8p to 8a · every day hour anchored
         </div>
       </div>
       <div className="tabs">
         <button className={tab === "build" ? "on" : ""} onClick={() => setTab("build")}>Build schedule</button>
+        <button className={tab === "staff" ? "on" : ""} onClick={() => setTab("staff")}>Staff</button>
         <button className={tab === "ledger" ? "on" : ""} onClick={() => setTab("ledger")}>Hours ledger{log.length ? ` (${log.length})` : ""}</button>
       </div>
       <div className="hairline" />
+
+      {tab === "staff" && (
+        <StaffView staff={staff} colorIndex={colorIndex} log={log}
+          onUpdate={updateStaff} onRemove={removeStaff} onAdd={addStaff}
+          adminPin={adminPin} setAdminPin={setAdminPin} onPublish={publishStaff} syncNote={syncNote} />
+      )}
 
       {tab === "ledger" && <LedgerView log={log} staff={staff} colorIndex={colorIndex} onDelete={deleteWeek} />}
 
@@ -257,133 +346,98 @@ export default function Page() {
       <div className="layout">
         <div>
           <div className="panel">
-            <h2>Week</h2>
-            <div className="field">
-              <label>Week starts</label>
-              <input type="date" value={weekStart} onChange={(e) => setWeekStart(e.target.value)} />
+            <h2>Period</h2>
+            <div className="pivot" style={{ marginBottom: 12 }}>
+              <button className={mode === "week" ? "on" : ""} onClick={() => setMode("week")}>One week</button>
+              <button className={mode === "month" ? "on" : ""} onClick={() => setMode("month")}>Whole month</button>
             </div>
-          </div>
-
-          <div className="panel">
-            <h2>Roster · Weekly Hours</h2>
-            <table className="roster">
-              <thead>
-                <tr>
-                  <th></th><th>ID</th><th>Name</th><th>Pref</th><th>Min</th><th>Max</th><th>Lean</th><th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {staff.map((row, i) => (
-                  <tr key={i}>
-                    <td><span className="swatch" style={{ background: colorFor(i) }} /></td>
-                    <td className="idcell" style={{ width: 40 }}>
-                      <input type="text" value={row.id} maxLength={4} onFocus={selectAll}
-                        onChange={(e) => updateStaff(i, { id: e.target.value.toUpperCase() })} />
-                    </td>
-                    <td style={{ minWidth: 76 }}>
-                      <input type="text" value={row.name} placeholder="name"
-                        onChange={(e) => updateStaff(i, { name: e.target.value })} />
-                    </td>
-                    <td style={{ width: 44 }}>
-                      <input type="text" inputMode="numeric" pattern="[0-9]*" value={row.pref} onFocus={selectAll}
-                        onChange={(e) => updateStaff(i, { pref: e.target.value.replace(/[^0-9]/g, "") })} />
-                    </td>
-                    <td style={{ width: 44 }}>
-                      <input type="text" inputMode="numeric" pattern="[0-9]*" value={row.min} onFocus={selectAll}
-                        onChange={(e) => updateStaff(i, { min: e.target.value.replace(/[^0-9]/g, "") })} />
-                    </td>
-                    <td style={{ width: 44 }}>
-                      <input type="text" inputMode="numeric" pattern="[0-9]*" value={row.max} onFocus={selectAll}
-                        onChange={(e) => updateStaff(i, { max: e.target.value.replace(/[^0-9]/g, "") })} />
-                    </td>
-                    <td>
-                      <select value={row.lean} onChange={(e) => updateStaff(i, { lean: e.target.value as Lean })}>
-                        <option value="day">day</option>
-                        <option value="night">night</option>
-                        <option value="any">any</option>
-                      </select>
-                    </td>
-                    <td><button className="rowdrop" onClick={() => removeStaff(i)} title="Remove">×</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <button className="addrow" onClick={addStaff}>+ Add staff</button>
-            <div className={`capline ${capBad ? "bad" : ""}`}>
-              Set each person&apos;s hours; staffing per shift works itself out. Hours land in 4-hour steps.
-              Keeping two on all week takes {capacity.floorHours} staff-hours · your minimums claim {capacity.minH} · maximums allow {capacity.maxH}
-              {capBad && <span> — maximums cannot hold the floor, raise some Max hours or add staff</span>}
-            </div>
-          </div>
-
-          <div className="panel">
-            <h2>Time Off Requests</h2>
-            {requests.length === 0 && (
-              <p style={{ fontSize: 12, color: "var(--ink-soft)", margin: "0 0 10px" }}>
-                None yet. Block a whole day, one shift, or a window like an appointment.
-                A partial window only holds the exact hours it touches.
-              </p>
+            {mode === "week" ? (
+              <div className="field"><label>Week starts</label>
+                <input type="date" value={weekStart} onChange={(e) => setWeekStart(e.target.value)} /></div>
+            ) : (
+              <div className="field"><label>Month</label>
+                <input type="month" value={monthPick} onChange={(e) => setMonthPick(e.target.value)} /></div>
             )}
-            {requests.map((req, i) => (
-              <div className="reqblock" key={i}>
-                <div className="reqrow">
-                  <select value={req.id} onChange={(e) => updateRequest(i, { id: e.target.value })}>
-                    {staff.map((s, k) => <option key={k} value={s.id}>{s.id}</option>)}
-                  </select>
-                  <select value={req.day} onChange={(e) => updateRequest(i, { day: +e.target.value })}>
-                    {Array.from({ length: DAYS }).map((_, d) => {
-                      const dt = addDays(weekStart, d);
-                      return <option key={d} value={d}>{DAY_ABBR[dt.getDay()]} {dt.getMonth() + 1}/{dt.getDate()}</option>;
-                    })}
-                  </select>
-                  <select value={req.kind} onChange={(e) => updateRequest(i, { kind: e.target.value as Request["kind"] })}>
-                    <option value="all">all day</option>
-                    <option value="day">day shift</option>
-                    <option value="night">night shift</option>
-                    <option value="custom">custom hours</option>
-                  </select>
-                  <button className="rowdrop" onClick={() => removeRequest(i)} title="Remove">×</button>
+          </div>
+
+          <div className="panel">
+            <h2>Time Off · This Period</h2>
+            <div className="syncrow">
+              <button className="addrow" style={{ width: "auto", padding: "8px 14px" }} onClick={refreshPortal}>↻ Load staff requests</button>
+            </div>
+            {syncNote && <p className="covnote">{syncNote}</p>}
+            {periodReqs.length === 0 && <p className="covnote" style={{ marginTop: 8 }}>No requests loaded for this period.</p>}
+            {periodReqs.map((r) => (
+              <div className="reqblock" key={r.key}>
+                <div className="reqrow4">
+                  {r.source === "admin" ? (
+                    <>
+                      <select value={r.id} onChange={(e) => updateAdminReq(r.key, { id: e.target.value })}>
+                        {staff.map((s, k) => <option key={k} value={s.id}>{s.id}</option>)}
+                      </select>
+                      <input type="date" value={r.date} onChange={(e) => updateAdminReq(r.key, { date: e.target.value })} />
+                      <select value={r.kind} onChange={(e) => updateAdminReq(r.key, { kind: e.target.value as AdminRequest["kind"] })}>
+                        <option value="all">all day</option>
+                        <option value="day">day shift</option>
+                        <option value="night">night shift</option>
+                        <option value="custom">custom hours</option>
+                      </select>
+                      <button className="rowdrop" onClick={() => removeAdminReq(r.key)}>×</button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="reqtag">{r.id}</span>
+                      <span className="reqinfo">{prettyDate(r.date)} · {r.kind === "custom" ? `${fmtClock(r.from)}–${fmtClock(r.to)}` : r.kind === "all" ? "whole day" : r.kind + " shift"} · from portal</span>
+                      <span />
+                      <button className="rowdrop" onClick={() => removePortalReq(r.key)}>×</button>
+                    </>
+                  )}
                 </div>
-                {req.kind === "custom" && (
+                {r.source === "admin" && r.kind === "custom" && (
                   <div className="reqtimes">
-                    <input type="time" value={req.from} onChange={(e) => updateRequest(i, { from: e.target.value })} />
+                    <input type="time" value={r.from} onChange={(e) => updateAdminReq(r.key, { from: e.target.value })} />
                     <span>to</span>
-                    <input type="time" value={req.to} onChange={(e) => updateRequest(i, { to: e.target.value })} />
-                    <span className="reqnote">holds: {describeBlocks(expandRequests([req]))}</span>
+                    <input type="time" value={r.to} onChange={(e) => updateAdminReq(r.key, { to: e.target.value })} />
                   </div>
                 )}
               </div>
             ))}
-            <button className="addrow" onClick={addRequest}>+ Add request</button>
+            <button className="addrow" onClick={addAdminReq}>+ Add time off myself</button>
           </div>
 
-          <button className="generate" onClick={generate}>Generate schedule</button>
+          <button className="generate" onClick={generate}>
+            {mode === "week" ? "Generate schedule" : "Generate the whole month"}
+          </button>
         </div>
 
         <div className="result">
-          {!result && (
-            <div className="panel">
-              <div className="empty">
-                Set hours and requests, then generate.<br />
-                The engine keeps at least two on at all times and decides on its own when a
-                third person or a split shift is needed to land everyone&apos;s hours.
-              </div>
-            </div>
+          {!results && genError.length === 0 && (
+            <div className="panel"><div className="empty">
+              Pick the period, load staff requests, then generate.<br />
+              Staffing, splits, and extra people are decided by the engine from everyone&apos;s hours.
+            </div></div>
           )}
 
-          {result && (result.status === "INVALID" || result.status === "INFEASIBLE") && (
+          {genError.length > 0 && (
             <div>
-              <div className="sealbar">
-                <span className="dot warn" />
-                <span className="label">No valid schedule exists for these inputs</span>
-              </div>
-              {result.problems.map((p, i) => <div className="problem" key={i}>{p}</div>)}
+              <div className="sealbar"><span className="dot warn" /><span className="label">Stopped: a week could not be scheduled</span></div>
+              {genError.map((p, i) => <div className="problem" key={i}>{p}</div>)}
             </div>
           )}
 
-          {result && result.status === "OK" && cfgUsed && (
-            <ResultView cfg={cfgUsed} result={result} colorIndex={colorIndex} weekStart={weekStart}
-              requests={requests} onLog={logWeek} saveNote={saveNote} />
+          {results && genError.length === 0 && (
+            <div className="printarea">
+              {results.map((w) => w.result.status === "OK" && (
+                <WeekBand key={w.weekStart} weekStart={w.weekStart} cfg={w.cfg}
+                  sol={w.result.sol} colorIndex={colorIndex} />
+              ))}
+              <PeriodHours results={results} colorIndex={colorIndex} />
+              <div className="tools noprint">
+                <button className="primarytool" onClick={logAll}>Save to hours ledger</button>
+                <button onClick={() => window.print()}>Print schedule</button>
+              </div>
+              {saveNote && <div className="savednote noprint">{saveNote}</div>}
+            </div>
           )}
         </div>
       </div>
@@ -392,156 +446,185 @@ export default function Page() {
   );
 }
 
-// A person's presence on one side of one date, with real times.
-// Stretches are contiguous, so start of first block to end of last block.
 const DAY_STARTS = ["8a", "12p", "4p"];
 const DAY_ENDS = ["12p", "4p", "8p"];
-const NIGHT_STARTS = ["8p", "12a", "4a"];
-const NIGHT_ENDS = ["12a", "4a", "8a"];
-function presence(day: boolean[], side: "day" | "night"): string | null {
-  const offset = side === "day" ? 0 : 3;
-  const starts = side === "day" ? DAY_STARTS : NIGHT_STARTS;
-  const ends = side === "day" ? DAY_ENDS : NIGHT_ENDS;
+function dayPresence(day: boolean[]): string | null {
   let first = -1, last = -1;
-  for (let i = 0; i < 3; i++) {
-    if (day[offset + i]) { if (first < 0) first = i; last = i; }
-  }
+  for (let i = 0; i < 3; i++) if (day[i]) { if (first < 0) first = i; last = i; }
   if (first < 0) return null;
-  return `${starts[first]}–${ends[last]}`;
+  return `${DAY_STARTS[first]}–${DAY_ENDS[last]}`;
 }
 
-function ResultView({
-  cfg, result, colorIndex, weekStart, requests, onLog, saveNote,
-}: {
-  cfg: Config;
-  result: Extract<ReturnType<typeof solve>, { status: "OK" }>;
-  colorIndex: Record<string, number>;
-  weekStart: string;
-  requests: Request[];
-  onLog: () => void;
-  saveNote: string;
+function WeekBand({ weekStart, cfg, sol, colorIndex }: {
+  weekStart: string; cfg: Config; sol: { assign: boolean[][][]; blocksOf: number[] }; colorIndex: Record<string, number>;
 }) {
-  const { sol } = result;
-  const stats = summarize(cfg, sol);
-
-  // Grid cells: for each day and side, who is on and at what times.
   const grid: { id: string; when: string }[][][] = [];
   for (let d = 0; d < DAYS; d++) {
     grid[d] = [[], []];
     for (let e = 0; e < cfg.staff.length; e++) {
-      const pDay = presence(sol.assign[e][d], "day");
-      const pNight = presence(sol.assign[e][d], "night");
-      if (pDay) grid[d][0].push({ id: cfg.staff[e].id, when: pDay });
-      if (pNight) grid[d][1].push({ id: cfg.staff[e].id, when: pNight });
+      const p = dayPresence(sol.assign[e][d]);
+      if (p) grid[d][0].push({ id: cfg.staff[e].id, when: p });
+      if (sol.assign[e][d][3]) grid[d][1].push({ id: cfg.staff[e].id, when: "8p–8a" });
     }
   }
-  // Floor check straight from the blocks.
-  let floorOk = true;
-  for (let d = 0; d < DAYS && floorOk; d++) {
-    for (let b = 0; b < BLOCKS; b++) {
-      let c = 0;
-      for (let e = 0; e < cfg.staff.length; e++) if (sol.assign[e][d][b]) c++;
-      if (c < FLOOR) { floorOk = false; break; }
-    }
-  }
-
   const chip = (p: { id: string; when: string }, k: number) => (
     <span className="chip" key={k} style={{ background: colorFor(colorIndex[p.id] ?? 0) }}>
       {p.id}<span className="chiptime">{p.when}</span>
     </span>
   );
-
   return (
-    <div>
-      <div className="sealbar">
-        <span className={`dot ${floorOk ? "good" : "warn"}`} />
-        <span className="label">
-          {floorOk ? "Coverage verified · at least two on, every hour of the week" : "Coverage gap detected"}
-        </span>
-        <span className="sub">best of {result.feasible.toLocaleString()} valid schedules</span>
-      </div>
-
+    <div className="weekband">
+      <div className="weekbandtitle">Week of {weekLabel(weekStart)}</div>
       <div className="band">
         <table>
-          <thead>
-            <tr>
-              <th style={{ width: 92 }}></th>
-              {Array.from({ length: DAYS }).map((_, d) => {
-                const dt = addDays(weekStart, d);
-                return (
-                  <th key={d}>
-                    {DAY_ABBR[dt.getDay()]}
-                    <span className="date">{dt.getMonth() + 1}/{dt.getDate()}</span>
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="rowhead"><span className="k">Day</span><span className="t">8 AM–8 PM</span></td>
-              {grid.map((day, d) => <td className="slot" key={d}>{day[0].map(chip)}</td>)}
-            </tr>
-            <tr>
-              <td className="rowhead"><span className="k">Night</span><span className="t">8 PM–8 AM</span></td>
-              {grid.map((day, d) => <td className="slot" key={d}>{day[1].map(chip)}</td>)}
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      {requests.length > 0 && (
-        <div className="honored">
-          Honored requests: {requests.map((r, i) => {
-            const dt = addDays(weekStart, r.day);
-            const when = r.kind === "custom" ? `${fmtClock(r.from)}–${fmtClock(r.to)}` : r.kind === "all" ? "all day" : r.kind + " shift";
-            return <span key={i}>{r.id} out {DAY_ABBR[dt.getDay()]} {dt.getMonth() + 1}/{dt.getDate()} ({when}){i < requests.length - 1 ? " · " : ""}</span>;
-          })}
-        </div>
-      )}
-
-      <div className="ledger">
-        <h3>This Week&apos;s Hours</h3>
-        <table>
-          <thead>
-            <tr><th>Staff</th><th>Hours</th><th>Target</th><th>Overtime</th><th>Nights</th><th>Weekend shifts</th></tr>
-          </thead>
-          <tbody>
-            {cfg.staff.map((s, i) => {
-              const h = stats.hours[s.id];
-              const ot = Math.max(0, h - OT_THRESHOLD);
-              const hit = h >= s.min && h <= s.max;
-              return (
-                <tr key={i}>
-                  <td className="id"><span className="sw" style={{ background: colorFor(i) }} />{s.id}{s.name ? ` · ${s.name}` : ""}</td>
-                  <td className={hit ? "hit" : "miss"}>{h} h</td>
-                  <td>{s.pref} h</td>
-                  <td className={ot > 0 ? "ot" : ""}>{ot > 0 ? `${ot} h OT` : "—"}</td>
-                  <td>{stats.nights[s.id]}</td>
-                  <td>{stats.weekends[s.id]}</td>
-                </tr>
-              );
+          <thead><tr>
+            <th className="slimcol"></th>
+            {Array.from({ length: DAYS }).map((_, d) => {
+              const iso = addDaysISO(weekStart, d);
+              const dt = new Date(iso + "T00:00:00");
+              return <th key={d}>{DOW[dt.getDay()]}<span className="date">{dt.getMonth() + 1}/{dt.getDate()}</span></th>;
             })}
+          </tr></thead>
+          <tbody>
+            <tr><td className="rowhead slim"><span>DAY</span></td>
+              {grid.map((day, d) => <td className="slot" key={d}>{day[0].map(chip)}</td>)}</tr>
+            <tr><td className="rowhead slim"><span>NIGHT</span></td>
+              {grid.map((day, d) => <td className="slot" key={d}>{day[1].map(chip)}</td>)}</tr>
           </tbody>
         </table>
       </div>
-
-      <div className="tools">
-        <button className="primarytool" onClick={onLog}>Save week to hours ledger</button>
-        <button onClick={() => window.print()}>Print or save PDF</button>
-      </div>
-      {saveNote && <div className="savednote">{saveNote} Open the Hours ledger tab to see running totals.</div>}
     </div>
   );
 }
 
-function LedgerView({
-  log, staff, colorIndex, onDelete,
+function PeriodHours({ results, colorIndex }: { results: WeekResult[]; colorIndex: Record<string, number> }) {
+  const good = results.filter((w) => w.result.status === "OK");
+  if (!good.length) return null;
+  const staff = good[0].cfg.staff;
+  const perWeek: Record<string, number>[] = good.map((w) =>
+    w.result.status === "OK" ? summarize(w.cfg, w.result.sol).hours : {});
+  return (
+    <div className="ledger">
+      <h3>{good.length > 1 ? "Hours · Whole Period" : "This Week's Hours"}</h3>
+      <table>
+        <thead><tr>
+          <th>Staff</th>
+          {good.map((w, i) => <th key={i}>Wk {i + 1}</th>)}
+          <th>Total</th><th>Overtime</th>
+        </tr></thead>
+        <tbody>
+          {staff.map((s, i) => {
+            const weekly = perWeek.map((h) => h[s.id] || 0);
+            const total = weekly.reduce((a, b) => a + b, 0);
+            const ot = weekly.reduce((a, b) => a + Math.max(0, b - OT_THRESHOLD), 0);
+            return (
+              <tr key={i}>
+                <td className="id"><span className="sw" style={{ background: colorFor(colorIndex[s.id] ?? 0) }} />{s.id}{s.name ? ` · ${s.name}` : ""}</td>
+                {weekly.map((h, k) => <td key={k}>{h}</td>)}
+                <td>{total} h</td>
+                <td className={ot > 0 ? "ot" : ""}>{ot > 0 ? `${ot} h` : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function StaffView({
+  staff, colorIndex, log, onUpdate, onRemove, onAdd, adminPin, setAdminPin, onPublish, syncNote,
 }: {
-  log: LoggedWeek[];
-  staff: RosterRow[];
-  colorIndex: Record<string, number>;
-  onDelete: (ws: string) => void;
+  staff: RosterRow[]; colorIndex: Record<string, number>; log: LoggedWeek[];
+  onUpdate: (i: number, p: Partial<RosterRow>) => void; onRemove: (i: number) => void; onAdd: () => void;
+  adminPin: string; setAdminPin: (p: string) => void; onPublish: () => void; syncNote: string;
+}) {
+  const selectAll = (e: React.FocusEvent<HTMLInputElement>) => e.target.select();
+  const sorted = [...log].sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
+  const sums = (id: string, n: number) => sorted.slice(0, n).reduce((a, w) => a + (w.hours[id] || 0), 0);
+  const latest = (id: string) => (sorted[0]?.hours[id] ?? 0);
+
+  return (
+    <div>
+      <div className="panel">
+        <h2>Admin · Sandy Murphy</h2>
+        <div className="adminrow">
+          <div className="field" style={{ margin: 0 }}><label>Admin sign-in: SM · PIN</label>
+            <input type="text" value={adminPin} onFocus={selectAll} onChange={(e) => setAdminPin(e.target.value)} style={{ width: 90 }} /></div>
+          <button className="addrow" style={{ width: "auto", padding: "10px 16px" }} onClick={onPublish}>Publish staff logins to the portal</button>
+        </div>
+        <p className="covnote">Staff sign in at <b>/portal</b> with their initials and PIN to submit next month&apos;s requests. Publish after changing names or PINs.</p>
+        {syncNote && <p className="covnote">{syncNote}</p>}
+      </div>
+
+      {staff.map((row, i) => {
+        const week = latest(row.id);
+        const ot = Math.max(0, week - OT_THRESHOLD);
+        return (
+          <div className="panel staffcard" key={i}>
+            <div className="staffhead">
+              <span className="swatch big" style={{ background: colorFor(i) }} />
+              <input className="staffid" type="text" value={row.id} maxLength={4} onFocus={selectAll}
+                onChange={(e) => onUpdate(i, { id: e.target.value.toUpperCase() })} />
+              <input className="staffname" type="text" value={row.name} placeholder="full name"
+                onChange={(e) => onUpdate(i, { name: e.target.value })} />
+              <button className="rowdrop" onClick={() => onRemove(i)}>× remove</button>
+            </div>
+            <div className="staffgrid">
+              <div className="field"><label>Shift side</label>
+                <select value={row.side} onChange={(e) => onUpdate(i, { side: e.target.value as Side })}>
+                  <option value="day">day only</option><option value="night">night only</option><option value="any">either</option>
+                </select></div>
+              <div className="field"><label>Type</label>
+                <select value={row.empType} onChange={(e) => onUpdate(i, { empType: e.target.value as "FT" | "PT" })}>
+                  <option value="FT">full time</option><option value="PT">part time</option>
+                </select></div>
+              <div className="field"><label>Longest stretch</label>
+                <select value={row.side === "night" ? "12" : row.stretch} disabled={row.side === "night"}
+                  onChange={(e) => onUpdate(i, { stretch: e.target.value as "8" | "12" })}>
+                  <option value="8">8 hours</option><option value="12">12 hours</option>
+                </select></div>
+              <div className="field"><label>Day lead (anchor)</label>
+                <select value={row.anchor ? "yes" : "no"} disabled={row.side === "night"}
+                  onChange={(e) => onUpdate(i, { anchor: e.target.value === "yes" })}>
+                  <option value="no">no</option><option value="yes">yes</option>
+                </select></div>
+              <div className="field"><label>Primary</label>
+                <select value={row.primary ? "yes" : "no"}
+                  onChange={(e) => onUpdate(i, { primary: e.target.value === "yes" })}>
+                  <option value="no">no</option><option value="yes">yes</option>
+                </select></div>
+              <div className="field"><label>Portal PIN</label>
+                <input type="text" value={row.pin} onFocus={selectAll} onChange={(e) => onUpdate(i, { pin: e.target.value })} /></div>
+              <div className="field"><label>Target h</label>
+                <input type="text" inputMode="numeric" value={row.pref} onFocus={selectAll}
+                  onChange={(e) => onUpdate(i, { pref: e.target.value.replace(/[^0-9]/g, "") })} /></div>
+              <div className="field"><label>Min h</label>
+                <input type="text" inputMode="numeric" value={row.min} onFocus={selectAll}
+                  onChange={(e) => onUpdate(i, { min: e.target.value.replace(/[^0-9]/g, "") })} /></div>
+              <div className="field"><label>Max h</label>
+                <input type="text" inputMode="numeric" value={row.max} onFocus={selectAll}
+                  onChange={(e) => onUpdate(i, { max: e.target.value.replace(/[^0-9]/g, "") })} /></div>
+            </div>
+            <div className="field"><label>Notes / requirements</label>
+              <input type="text" value={row.notes} placeholder="anything to remember about this person"
+                onChange={(e) => onUpdate(i, { notes: e.target.value })} /></div>
+            <div className="staffhours">
+              <span>Latest week: <b className={ot > 0 ? "ot" : ""}>{week} h{ot > 0 ? ` · ${ot} h OT` : ""}</b></span>
+              <span>2 weeks: <b>{sums(row.id, 2)} h</b></span>
+              <span>4 weeks: <b>{sums(row.id, 4)} h</b></span>
+              <span>All logged: <b>{sums(row.id, sorted.length)} h</b></span>
+            </div>
+          </div>
+        );
+      })}
+      <button className="addrow" onClick={onAdd}>+ Add staff member</button>
+    </div>
+  );
+}
+
+function LedgerView({ log, staff, colorIndex, onDelete }: {
+  log: LoggedWeek[]; staff: RosterRow[]; colorIndex: Record<string, number>; onDelete: (ws: string) => void;
 }) {
   const totals = useMemo(() => {
     const t: Record<string, { hours: number; ot: number; weeks: number; name: string }> = {};
@@ -557,29 +640,17 @@ function LedgerView({
     for (const s of staff) if (t[s.id] && s.name) t[s.id].name = s.name;
     return t;
   }, [log, staff]);
-
   const ids = Object.keys(totals).sort((a, b) => totals[b].hours - totals[a].hours);
 
   if (log.length === 0) {
-    return (
-      <div className="panel">
-        <div className="empty">
-          No weeks saved yet.<br />
-          Generate a schedule, then tap Save week to hours ledger. Every saved week lands here,
-          with running totals and overtime tracked per person.
-        </div>
-      </div>
-    );
+    return <div className="panel"><div className="empty">No weeks saved yet. Generate a schedule, then save it to the ledger.</div></div>;
   }
-
   return (
     <div>
       <div className="panel">
         <h2>Running Totals · All Saved Weeks</h2>
         <table className="ledgertable">
-          <thead>
-            <tr><th>Staff</th><th>Weeks worked</th><th>Total hours</th><th>Total overtime</th></tr>
-          </thead>
+          <thead><tr><th>Staff</th><th>Weeks</th><th>Total hours</th><th>Total overtime</th></tr></thead>
           <tbody>
             {ids.map((id) => (
               <tr key={id}>
@@ -591,19 +662,16 @@ function LedgerView({
             ))}
           </tbody>
         </table>
-        <p className="covnote">Overtime counts hours above {OT_THRESHOLD} in a single week. The ledger lives on this device.</p>
+        <p className="covnote">Overtime counts hours above {OT_THRESHOLD} in a single week. Full per-person breakdowns live on the Staff tab.</p>
       </div>
-
       {log.map((w) => (
         <div className="panel" key={w.weekStart}>
           <div className="weekhead">
             <h2>Week of {weekLabel(w.weekStart)}</h2>
-            <button className="rowdrop" onClick={() => onDelete(w.weekStart)} title="Delete this week">× remove</button>
+            <button className="rowdrop" onClick={() => onDelete(w.weekStart)}>× remove</button>
           </div>
           <table className="ledgertable">
-            <thead>
-              <tr><th>Staff</th><th>Hours</th><th>Overtime</th></tr>
-            </thead>
+            <thead><tr><th>Staff</th><th>Hours</th><th>Overtime</th></tr></thead>
             <tbody>
               {Object.entries(w.hours).sort((a, b) => b[1] - a[1]).map(([id, h]) => {
                 const ot = Math.max(0, h - OT_THRESHOLD);

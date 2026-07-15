@@ -1,5 +1,4 @@
-export type Lean = "day" | "night" | "any";
-export type ShiftName = "day" | "night" | "all";
+export type Side = "day" | "night" | "any";
 
 export interface Staff {
   id: string;
@@ -7,22 +6,23 @@ export interface Staff {
   pref: number; // preferred weekly hours
   min: number; // hard minimum weekly hours
   max: number; // hard maximum weekly hours
-  lean: Lean;
+  side: Side;          // night-only staff never touch days, and the reverse
+  anchor: boolean;     // may lead a day shift; every day hour needs one anchor on
+  primary: boolean;    // scheduled first, protected toward their target
+  maxStretchBlocks: number; // longest continuous stretch, in 4h blocks (2 = 8h, 3 = 12h)
 }
 
-// A block-level hold: person cannot work block b of day d.
 export interface BlockOff {
   id: string;
   day: number;
-  block: number; // 0: 8a-2p, 1: 2p-8p, 2: 8p-2a, 3: 2a-8a
+  block: number; // 0:8a-12p 1:12p-4p 2:4p-8p 3:8p-12a 4:12a-4a 5:4a-8a
 }
 
 export interface Weights {
   hours: number;
   night: number;
   weekend: number;
-  lean: number;
-  fragment: number; // lone half-shifts cost a little, full shifts preferred
+  fragment: number;
 }
 
 export interface Config {
@@ -30,11 +30,13 @@ export interface Config {
   blockOff: BlockOff[];
   weights: Weights;
   weekendDays: number[];
+  carryNights?: number[];   // nights already worked earlier in the period, for fairness
+  carryWeekends?: number[]; // weekend days already worked earlier in the period
   seed?: number;
 }
 
 export interface Solution {
-  assign: boolean[][][]; // [employee][day][block]
+  assign: boolean[][][];
   blocksOf: number[];
 }
 

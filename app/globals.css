@@ -352,3 +352,61 @@ input:focus, select:focus { outline: 2px solid var(--seal); outline-offset: 1px;
 .savednote { margin-top: 12px; font-size: 12px; color: var(--good); }
 
 .chiptime { display: block; font-weight: 500; font-size: 9px; color: #4a453a; margin-top: 1px; letter-spacing: 0.3px; }
+
+/* Slim shift labels: the schedule speaks for itself */
+.rowhead.slim { width: 26px; padding: 4px 2px; text-align: center; }
+.rowhead.slim span {
+  writing-mode: vertical-rl; transform: rotate(180deg);
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px; color: var(--paper);
+}
+.slimcol { width: 26px; }
+.weekband { margin-bottom: 22px; }
+.weekbandtitle {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--ink-soft); margin: 0 0 8px;
+}
+
+/* Requests list */
+.reqrow4 { display: grid; grid-template-columns: auto 1fr auto auto; gap: 6px; align-items: center; }
+.reqtag { font-weight: 700; font-size: 12px; padding: 4px 8px; background: var(--paper-2); border-radius: 2px; }
+.reqinfo { font-size: 11px; color: var(--ink-soft); }
+.syncrow { margin-bottom: 8px; }
+
+/* Staff dashboard cards */
+.staffcard { margin-top: 14px; }
+.staffhead { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.swatch.big { width: 12px; height: 30px; }
+.staffid { width: 58px; font-weight: 700; text-align: center; }
+.staffname { flex: 1; }
+.staffgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 10px; }
+@media (min-width: 700px) { .staffgrid { grid-template-columns: repeat(5, 1fr); } }
+.staffhours {
+  display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--line-soft); font-size: 11px; color: var(--ink-soft);
+}
+.staffhours b { color: var(--ink); }
+.adminrow { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+
+/* Portal */
+.portalwrap { max-width: 560px; }
+.portalcard { margin-top: 18px; }
+.caldow { display: grid; grid-template-columns: repeat(7, 1fr); font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-soft); text-align: center; margin-bottom: 4px; }
+.calgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.calday {
+  aspect-ratio: 1; border: 1px solid var(--line); background: var(--paper);
+  font-family: var(--font-mono); font-size: 13px; color: var(--ink); border-radius: 2px; cursor: pointer;
+}
+.calday.req { background: var(--warn); color: #fff; border-color: var(--warn); }
+.calday.picked { outline: 2px solid var(--ink); }
+.pickpane { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.pickdate { font-family: var(--font-display); font-size: 18px; }
+.reqline { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+
+/* Print only the schedule itself */
+@media print {
+  body * { visibility: hidden; }
+  .printarea, .printarea * { visibility: visible; }
+  .printarea { position: absolute; left: 0; top: 0; width: 100%; }
+  .noprint, .noprint * { display: none !important; visibility: hidden !important; }
+  .weekband { page-break-inside: avoid; }
+}
