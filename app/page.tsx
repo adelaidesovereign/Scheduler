@@ -410,27 +410,61 @@ function dayPresence(day: boolean[]): string | null {
 function WeekBand({ weekStart, cfg, sol, colorIndex }: {
   weekStart: string; cfg: Config; sol: { assign: boolean[][][]; blocksOf: number[] }; colorIndex: Record<string, number>;
 }) {
-  const grid: { id: string; when: string; start: number; len: number }[][][] = [];
+  // Shifts render positioned by their real times, packed into lanes:
+  // a shift slides into the first lane free when it starts, so back-to-back
+  // shifts (8a-4p then 4p-8p) stack in one lane, and only truly overlapping
+  // shifts sit side by side. Same as the paper schedule.
+  type Bar = { id: string; when: string; start: number; len: number; lane: number };
+  const dayBars: Bar[][] = [];
+  const nightBars: Bar[][] = [];
   for (let d = 0; d < DAYS; d++) {
-    grid[d] = [[], []];
+    const items: Bar[] = [];
     for (let e = 0; e < cfg.staff.length; e++) {
-      const p = dayPresence(sol.assign[e][d]);
-      if (p) {
-        let first = 3, len = 0;
-        for (let b = 0; b < 3; b++) if (sol.assign[e][d][b]) { first = Math.min(first, b); len++; }
-        grid[d][0].push({ id: cfg.staff[e].id, when: p, start: first, len });
-      }
-      if (sol.assign[e][d][3]) grid[d][1].push({ id: cfg.staff[e].id, when: "8p–8a", start: 0, len: 3 });
+      const pres = dayPresence(sol.assign[e][d]);
+      if (!pres) continue;
+      let first = 3, len = 0;
+      for (let b = 0; b < 3; b++) if (sol.assign[e][d][b]) { first = Math.min(first, b); len++; }
+      items.push({ id: cfg.staff[e].id, when: pres, start: first, len, lane: 0 });
     }
-    // Earliest start first; among same starts, the longer shift leads.
-    grid[d][0].sort((a, b) => a.start - b.start || b.len - a.len || a.id.localeCompare(b.id));
-    grid[d][1].sort((a, b) => a.id.localeCompare(b.id));
+    items.sort((a, b) => a.start - b.start || b.len - a.len || a.id.localeCompare(b.id));
+    const laneEnds: number[] = [];
+    for (const it of items) {
+      let lane = laneEnds.findIndex((end) => end <= it.start);
+      if (lane === -1) { lane = laneEnds.length; laneEnds.push(0); }
+      it.lane = lane;
+      laneEnds[lane] = it.start + it.len;
+    }
+    dayBars.push(items);
+
+    const nItems: Bar[] = [];
+    for (let e = 0; e < cfg.staff.length; e++) {
+      if (sol.assign[e][d][3]) nItems.push({ id: cfg.staff[e].id, when: "8p–8a", start: 0, len: 3, lane: 0 });
+    }
+    nItems.sort((a, b) => a.id.localeCompare(b.id)).forEach((it, i) => (it.lane = i));
+    nightBars.push(nItems);
   }
-  const chip = (p: { id: string; when: string }, k: number) => (
-    <span className="chip" key={k} style={{ background: colorFor(colorIndex[p.id] ?? 0) }}>
-      {p.id}<span className="chiptime">{p.when}</span>
-    </span>
-  );
+
+  const cell = (items: Bar[], tall: boolean) => {
+    const lanes = Math.max(1, ...items.map((i) => i.lane + 1));
+    return (
+      <div className={"timecell" + (tall ? " tall" : " short")}>
+        <span className="gridline g1" /><span className="gridline g2" />
+        {items.map((it, k) => (
+          <span className="bar" key={k} style={{
+            background: colorFor(colorIndex[it.id] ?? 0),
+            left: `calc(${(it.lane * 100) / lanes}% + 2px)`,
+            width: `calc(${100 / lanes}% - 4px)`,
+            top: `${(it.start * 100) / 3}%`,
+            height: `calc(${(it.len * 100) / 3}% - 3px)`,
+          }}>
+            <span className="barid">{it.id}</span>
+            <span className="bartime">{it.when}</span>
+          </span>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="weekband">
       <div className="weekbandtitle">Week of {weekLabel(weekStart)}</div>
@@ -445,10 +479,10 @@ function WeekBand({ weekStart, cfg, sol, colorIndex }: {
             })}
           </tr></thead>
           <tbody>
-            <tr><td className="rowhead slim"><span>DAY</span></td>
-              {grid.map((day, d) => <td className="slot" key={d}>{day[0].map(chip)}</td>)}</tr>
-            <tr><td className="rowhead slim"><span>NIGHT</span></td>
-              {grid.map((day, d) => <td className="slot" key={d}>{day[1].map(chip)}</td>)}</tr>
+            <tr><td className="rowhead slim"><span>DAY 8A–8P</span></td>
+              {dayBars.map((items, d) => <td className="slot timeslot" key={d}>{cell(items, true)}</td>)}</tr>
+            <tr><td className="rowhead slim"><span>NIGHT 8P–8A</span></td>
+              {nightBars.map((items, d) => <td className="slot timeslot" key={d}>{cell(items, false)}</td>)}</tr>
           </tbody>
         </table>
       </div>
