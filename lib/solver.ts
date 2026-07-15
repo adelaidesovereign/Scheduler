@@ -62,6 +62,38 @@ function validate(cfg: Config): string[] {
   if (anchors.length === 0) {
     problems.push("No day anchors on the roster. At least one person must be marked as an anchor so every day shift has a lead on.");
   }
+
+  // Name the exact slot that cannot be covered, so the fix is obvious.
+  const off = new Set(cfg.blockOff.map((t) => `${t.id}|${t.day}|${t.block}`));
+  const label = (d: number) => cfg.dayLabels?.[d] || `day ${d + 1}`;
+  const times = ["8a-12p", "12p-4p", "4p-8p"];
+  for (let d = 0; d < DAYS; d++) {
+    for (let bl = 0; bl < 3; bl++) {
+      let avail = 0, anchorAvail = 0;
+      for (const st of cfg.staff) {
+        if (st.side === "night") continue;
+        if (off.has(`${st.id}|${d}|${bl}`)) continue;
+        if (st.max <= 0) continue;
+        avail++;
+        if (st.anchor) anchorAvail++;
+      }
+      if (avail < FLOOR) {
+        problems.push(`${label(d)} ${times[bl]}: only ${avail} day ${avail === 1 ? "person is" : "people are"} available, and every hour needs ${FLOOR}. Free someone up for that slot.`);
+      } else if (anchorAvail === 0) {
+        problems.push(`${label(d)} ${times[bl]}: no day lead (anchor) is available. Every day hour needs one of your anchors on, so free an anchor for that slot or mark another day person as an anchor.`);
+      }
+    }
+    let nightAvail = 0;
+    for (const st of cfg.staff) {
+      if (st.side === "day") continue;
+      if (off.has(`${st.id}|${d}|3`) || off.has(`${st.id}|${d}|4`) || off.has(`${st.id}|${d}|5`)) continue;
+      if (st.max <= 0) continue;
+      nightAvail++;
+    }
+    if (nightAvail < FLOOR) {
+      problems.push(`${label(d)} night: only ${nightAvail} night ${nightAvail === 1 ? "person is" : "people are"} available for 8p-8a, and every night needs ${FLOOR}. Free a night person up for that date.`);
+    }
+  }
   return problems;
 }
 
@@ -79,6 +111,12 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
 
   const off = new Set(cfg.blockOff.map((t) => `${t.id}|${t.day}|${t.block}`));
   const blocked = (e: number, d: number, b: number) => off.has(`${cfg.staff[e].id}|${d}|${b}`);
+  // How many day blocks each person could possibly work this week.
+  const scarcity: number[] = cfg.staff.map((st, e) => {
+    let c = 0;
+    for (let d = 0; d < DAYS; d++) for (let b = 0; b < 3; b++) if (!blocked(e, d, b)) c++;
+    return c;
+  });
 
   const slotCount = (d: number, b: number) => {
     let c = 0; for (let e = 0; e < n; e++) if (assign[e][d][b]) c++;
@@ -200,6 +238,11 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
         }
         if (pool.length === 0) return null;
         pool.sort((a, z) => {
+          if (needAnchor) {
+            // Spend the most constrained anchor first where they CAN work,
+            // saving flexible anchors for the slots only they can hold.
+            if (scarcity[a] !== scarcity[z]) return scarcity[a] - scarcity[z];
+          }
           const ca = dayRun(a, d).length > 0 ? 0 : 1;      // keep stretches whole
           const cz = dayRun(z, d).length > 0 ? 0 : 1;
           if (ca !== cz) return ca - cz;

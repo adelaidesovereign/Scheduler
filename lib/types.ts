@@ -33,6 +33,7 @@ export interface Config {
   weekendDays: number[];
   carryNights?: number[];   // nights already worked earlier in the period, for fairness
   carryWeekends?: number[]; // weekend days already worked earlier in the period
+  dayLabels?: string[];     // display names for days, used in problem messages
   seed?: number;
 }
 

@@ -11,7 +11,7 @@ const PALETTE = [
 const colorFor = (i: number) => PALETTE[i % PALETTE.length];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const OT_THRESHOLD = 40;
-const APP_VERSION = "v7";
+const APP_VERSION = "v8";
 const ROSTER_KEY = "sa_roster_v3";
 const LOG_KEY = "sa_hourslog_v1";
 const ADMIN_KEY = "sa_admin_v1";
@@ -261,6 +261,7 @@ export default function Page() {
         blockOff: [...requestsToBlocks(allReqs, ws), ...availabilityToBlocks(staff, ws), ...extraOff],
         weights: { hours: 100, night: 8, weekend: 6, fragment: 8, crowd: 20 },
         weekendDays: wd,
+        dayLabels: Array.from({ length: DAYS }, (_, i) => prettyDate(addDaysISO(ws, i))),
         carryNights: [...carryNights],
         carryWeekends: [...carryWeekends],
         seed: Math.floor(Math.random() * 1e9),
