@@ -11,7 +11,7 @@ const PALETTE = [
 const colorFor = (i: number) => PALETTE[i % PALETTE.length];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const OT_THRESHOLD = 40;
-const APP_VERSION = "v11";
+const APP_VERSION = "v12";
 const ROSTER_KEY = "sa_roster_v3";
 const LOG_KEY = "sa_hourslog_v1";
 const ADMIN_KEY = "sa_admin_v1";
@@ -34,18 +34,24 @@ interface AdminRequest {
 interface LoggedWeek { weekStart: string; hours: Record<string, number>; names: Record<string, string>; savedAt: string; }
 interface WeekResult { weekStart: string; cfg: Config; result: ReturnType<typeof solve>; }
 
+const cherryAvail = (): boolean[][] => Array.from({ length: 7 }, (_, dw) => [true, true, dw === 6, true]);
+const nightsOn = (days: number[]): boolean[][] => Array.from({ length: 7 }, (_, dw) => [true, true, true, days.includes(dw)]);
+
 const DEFAULT_ROSTER: RosterRow[] = [
-  { id: "AT", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
-  { id: "CT", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
-  { id: "CM", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: false, stretch: "12", pref: "32", min: "24", max: "40", avail: fullAvail() },
-  { id: "AD", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "32", min: "24", max: "40", avail: fullAvail() },
-  { id: "KH", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "24", min: "16", max: "32", avail: fullAvail() },
-  { id: "WR", name: "", pin: "1111", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
-  { id: "EH", name: "", pin: "1111", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
-  { id: "SL", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36", avail: fullAvail() },
-  { id: "VT", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36", avail: fullAvail() },
-  { id: "YN", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36", avail: fullAvail() },
+  { id: "AT", name: "Addie", pin: "", notes: "", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "44", min: "36", max: "48", avail: fullAvail() },
+  { id: "CT", name: "Cherry", pin: "", notes: "Only works past 4p on Saturdays", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "40", min: "36", max: "48", avail: cherryAvail() },
+  { id: "CM", name: "Consuelo", pin: "", notes: "", side: "day", empType: "FT", anchor: true, primary: false, stretch: "8", pref: "32", min: "24", max: "40", avail: fullAvail() },
+  { id: "KH", name: "Kimberly", pin: "", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "12", min: "8", max: "24", avail: fullAvail() },
+  { id: "DG", name: "Doreen", pin: "", notes: "Can work 12-hour days", side: "day", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "20", min: "16", max: "36", avail: fullAvail() },
+  { id: "HT", name: "Haley", pin: "", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "28", min: "16", max: "32", avail: fullAvail() },
+  { id: "WR", name: "Wilma", pin: "", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
+  { id: "EH", name: "Erica", pin: "", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
+  { id: "SL", name: "Samantha", pin: "", notes: "Fri and Sat nights", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36", avail: nightsOn([5, 6]) },
+  { id: "VT", name: "Valarie", pin: "", notes: "Sun and Mon nights", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36", avail: nightsOn([0, 1]) },
+  { id: "YN", name: "Yolande", pin: "", notes: "Tue through Thu nights", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "36", min: "24", max: "36", avail: nightsOn([2, 3, 4]) },
+  { id: "SH", name: "", pin: "", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36", avail: fullAvail() },
 ];
+
 
 // Rules for known initials, used when migrating an older saved roster.
 const KNOWN: Record<string, Partial<RosterRow>> = Object.fromEntries(
@@ -152,7 +158,6 @@ export default function Page() {
   const [genError, setGenError] = useState<string[]>([]);
   const [log, setLog] = useState<LoggedWeek[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [saveNote, setSaveNote] = useState("");
 
   useEffect(() => {
     // If the phone cached an old copy of the app, loading new pieces fails.
@@ -244,7 +249,7 @@ export default function Page() {
   function removeAdminReq(k: string) { setAdminReqs((t) => t.filter((r) => r.key !== k)); }
 
   function generate() {
-    setSaveNote(""); setGenError([]);
+    setGenError([]);
     try {
     const cleanStaff = rowsToStaff(staff);
     const allReqs = adminReqs;
@@ -286,28 +291,26 @@ export default function Page() {
       });
     }
     setResults(out);
+    // Hours track themselves: every clean generation writes its weeks to
+    // the ledger, replacing any earlier version of the same week.
+    if (out.length > 0 && out.every((w) => w.result.status === "OK")) {
+      setLog((l) => {
+        let next = [...l];
+        for (const w of out) {
+          if (w.result.status !== "OK") continue;
+          const stats = summarize(w.cfg, w.result.sol);
+          const names: Record<string, string> = {};
+          for (const st of w.cfg.staff) names[st.id] = st.name || "";
+          next = next.filter((x) => x.weekStart !== w.weekStart);
+          next.push({ weekStart: w.weekStart, hours: stats.hours, names, savedAt: new Date().toISOString() });
+        }
+        return next.sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
+      });
+    }
     } catch (err) {
       setGenError(["The engine hit an unexpected error: " + String(err) + ". If this keeps happening, use Reset app data on the Staff tab and re-enter your roster."]);
       setResults(null);
     }
-  }
-
-  function logAll() {
-    if (!results) return;
-    const good = results.filter((w) => w.result.status === "OK");
-    setLog((l) => {
-      let next = [...l];
-      for (const w of good) {
-        if (w.result.status !== "OK") continue;
-        const stats = summarize(w.cfg, w.result.sol);
-        const names: Record<string, string> = {};
-        for (const s of w.cfg.staff) names[s.id] = s.name || "";
-        next = next.filter((x) => x.weekStart !== w.weekStart);
-        next.push({ weekStart: w.weekStart, hours: stats.hours, names, savedAt: new Date().toISOString() });
-      }
-      return next.sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
-    });
-    setSaveNote(`${good.length} week${good.length === 1 ? "" : "s"} saved to the hours ledger.`);
   }
 
   function deleteWeek(ws: string) { setLog((l) => l.filter((w) => w.weekStart !== ws)); }
@@ -432,10 +435,9 @@ export default function Page() {
               ))}
               <PeriodHours results={results} colorIndex={colorIndex} />
               <div className="tools noprint">
-                <button className="primarytool" onClick={logAll}>Save to hours ledger</button>
                 <button onClick={() => window.print()}>Print schedule</button>
               </div>
-              {saveNote && <div className="savednote noprint">{saveNote}</div>}
+              <div className="savednote noprint">Hours saved to the ledger automatically. The Staff and Hours ledger tabs are up to date.</div>
             </div>
           )}
         </div>
