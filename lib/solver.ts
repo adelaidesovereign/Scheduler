@@ -4,6 +4,7 @@ export const DAYS = 7;
 export const BLOCKS = 6;        // 0:8a-12p 1:12p-4p 2:4p-8p | 3:8p-12a 4:12a-4a 5:4a-8a
 export const BLOCK_HOURS = 4;
 export const FLOOR = 2;         // at least two on, every hour, always
+export const MAX_PER_BLOCK = 4;  // never more than four on at once
 const NIGHT = [3, 4, 5];        // the night shift is one piece: 8p-8a, always 12 hours
 
 const isDaySide = (b: number) => b < 3;
@@ -53,6 +54,10 @@ function validate(cfg: Config): string[] {
   if (nightCap * BLOCK_HOURS < DAYS * 3 * FLOOR * BLOCK_HOURS) {
     problems.push("Night coverage cannot be held: night-capable staff maximums are below the 168 hours the night side needs. Raise a night person's Max or add night staff.");
   }
+  const dayMin = cfg.staff.reduce((a, s, i) => a + (s.side !== "night" ? b[i].minBlocks : 0), 0);
+  if (dayMin > DAYS * 3 * 4) {
+    problems.push("Day minimum hours add up to more than four-at-a-time can ever hold. Lower some day minimums.");
+  }
   const anchors = cfg.staff.filter((s) => s.anchor && s.side !== "night");
   if (anchors.length === 0) {
     problems.push("No day anchors on the roster. At least one person must be marked as an anchor so every day shift has a lead on.");
@@ -75,6 +80,10 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
   const off = new Set(cfg.blockOff.map((t) => `${t.id}|${t.day}|${t.block}`));
   const blocked = (e: number, d: number, b: number) => off.has(`${cfg.staff[e].id}|${d}|${b}`);
 
+  const slotCount = (d: number, b: number) => {
+    let c = 0; for (let e = 0; e < n; e++) if (assign[e][d][b]) c++;
+    return c;
+  };
   const dayRun = (e: number, d: number): number[] => {
     const out: number[] = [];
     for (let b = 0; b < 3; b++) if (assign[e][d][b]) out.push(b);
@@ -82,10 +91,6 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
   };
   const onNight = (e: number, d: number) => d >= 0 && d < DAYS && assign[e][d][3];
   const onDaySide = (e: number, d: number) => d >= 0 && d < DAYS && (assign[e][d][0] || assign[e][d][1] || assign[e][d][2]);
-  const slotCount = (d: number, b: number) => {
-    let c = 0; for (let e = 0; e < n; e++) if (assign[e][d][b]) c++;
-    return c;
-  };
   const anchorOn = (d: number, b: number) => {
     for (let e = 0; e < n; e++) if (assign[e][d][b] && cfg.staff[e].anchor) return true;
     return false;
@@ -95,6 +100,7 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
   const canNight = (e: number, d: number): boolean => {
     const s = cfg.staff[e];
     if (s.side === "day") return false;
+    if (slotCount(d, 3) >= MAX_PER_BLOCK) return false;
     if (blocksOf[e] + 3 > bnd[e].maxBlocks) return false;
     if (onNight(e, d)) return false;
     if (onDaySide(e, d)) return false;                    // no day into night same day
@@ -110,6 +116,7 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
     const s = cfg.staff[e];
     if (s.side === "night") return false;
     if (assign[e][d][b]) return false;
+    if (slotCount(d, b) >= MAX_PER_BLOCK) return false;
     if (blocksOf[e] >= bnd[e].maxBlocks) return false;
     if (blocked(e, d, b)) return false;
     if (onNight(e, d)) return false;                      // no night into day same op-day
@@ -170,7 +177,18 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
         });
         // A little variety between attempts finds ways out of tight corners.
         const pick = pool.length > 1 && rand() < 0.35 ? 1 : 0;
-        placeDay(pool[Math.min(pick, pool.length - 1)], d, b);
+        const chosen = pool[Math.min(pick, pool.length - 1)];
+        const wasFresh = dayRun(chosen, d).length === 0;
+        placeDay(chosen, d, b);
+        if (wasFresh) {
+          // Ride the same person forward into the day's remaining need,
+          // building one real stretch instead of stranding a 4-hour piece.
+          for (let nb = b + 1; nb < 3; nb++) {
+            if (slotCount(d, nb) >= FLOOR) break;
+            if (!canDayBlock(chosen, d, nb)) break;
+            placeDay(chosen, d, nb);
+          }
+        }
         if (slotCount(d, b) >= FLOOR && anchorOn(d, b)) break;
       }
     }
@@ -193,21 +211,76 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
           if (bestD >= 0) { placeNight(e, bestD); placed = true; }
         }
         if (!placed && s.side !== "night") {
+          // First choice: extend one of their existing stretches toward a full shift.
           let best: [number, number] | null = null, bestKey = Infinity;
           for (let d = 0; d < DAYS; d++) {
-            for (let b = 0; b < 3; b++) {
+            const run = dayRun(e, d);
+            if (run.length === 0) continue;
+            for (const b of [run[0] - 1, run[run.length - 1] + 1]) {
+              if (b < 0 || b > 2) continue;
               if (!canDayBlock(e, d, b)) continue;
-              const key = (dayRun(e, d).length > 0 ? 0 : 100) + slotCount(d, b) * 10;
+              const key = slotCount(d, b);
               if (key < bestKey) { bestKey = key; best = [d, b]; }
             }
           }
           if (best) { placeDay(e, best[0], best[1]); placed = true; }
+          if (!placed) {
+            // Otherwise start one clean stretch: as long as their need allows,
+            // on the least crowded day, instead of scattering 4-hour pieces.
+            const needK = bnd[e].minBlocks - blocksOf[e];
+            for (let L = Math.min(3, s.maxStretchBlocks, Math.max(1, needK)); L >= 1 && !placed; L--) {
+              let bestS: [number, number] | null = null, bestSKey = Infinity;
+              for (let d = 0; d < DAYS; d++) {
+                if (dayRun(e, d).length > 0) continue;
+                for (let st = 0; st + L <= 3; st++) {
+                  let okAll = true, crowd = 0;
+                  for (let b = st; b < st + L; b++) {
+                    if (assign[e][d][b] || blocked(e, d, b) || slotCount(d, b) >= MAX_PER_BLOCK) { okAll = false; break; }
+                    crowd += slotCount(d, b);
+                  }
+                  if (!okAll) continue;
+                  if (onNight(e, d) || onNight(e, d - 1)) continue;
+                  if (blocksOf[e] + L > bnd[e].maxBlocks) continue;
+                  if (crowd < bestSKey) { bestSKey = crowd; bestS = [d, st]; }
+                }
+              }
+              if (bestS) {
+                for (let b = bestS[1]; b < bestS[1] + L; b++) placeDay(e, bestS[0], b);
+                placed = true;
+              }
+            }
+          }
         }
         if (!placed) break;
         progressed = true;
       }
     }
     if (!progressed) break;
+  }
+
+  // ---- Phase 3b: top up toward targets by lengthening existing stretches only. ----
+  for (let round = 0; round < 3; round++) {
+    let grew = false;
+    for (let e = 0; e < n; e++) {
+      if (cfg.staff[e].side === "night") continue;
+      while (blocksOf[e] < bnd[e].prefBlocks) {
+        let best: [number, number] | null = null, bestKey = Infinity;
+        for (let d = 0; d < DAYS; d++) {
+          const run = dayRun(e, d);
+          if (run.length === 0) continue;
+          for (const b of [run[0] - 1, run[run.length - 1] + 1]) {
+            if (b < 0 || b > 2) continue;
+            if (!canDayBlock(e, d, b)) continue;
+            const key = slotCount(d, b);
+            if (key < bestKey) { bestKey = key; best = [d, b]; }
+          }
+        }
+        if (!best) break;
+        placeDay(e, best[0], best[1]);
+        grew = true;
+      }
+    }
+    if (!grew) break;
   }
 
   // ---- Phase 4: swap repair for anyone still short. ----
@@ -260,6 +333,39 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
     if (!changed) break;
   }
 
+  // ---- Phase 5: erase lone 4-hour pieces where the rules allow. ----
+  for (let round = 0; round < 3; round++) {
+    let cleaned = false;
+    for (let e = 0; e < n; e++) {
+      for (let d = 0; d < DAYS; d++) {
+        const run = dayRun(e, d);
+        if (run.length !== 1) continue;
+        const b = run[0];
+        // Try to grow it into a real stretch first.
+        let grown = false;
+        for (const nb of [b - 1, b + 1]) {
+          if (nb < 0 || nb > 2) continue;
+          if (canDayBlock(e, d, nb)) { placeDay(e, d, nb); grown = true; cleaned = true; break; }
+        }
+        if (grown) continue;
+        // Otherwise hand the block to someone already working next to it,
+        // as long as the floor, the anchor, and this person's minimum all hold.
+        if (blocksOf[e] - 1 < bnd[e].minBlocks) continue;
+        if (slotCount(d, b) - 1 < FLOOR) continue;
+        if (cfg.staff[e].anchor) {
+          let otherAnchor = false;
+          for (let x = 0; x < n; x++) {
+            if (x !== e && assign[x][d][b] && cfg.staff[x].anchor) { otherAnchor = true; break; }
+          }
+          if (!otherAnchor) continue;
+        }
+        removeDay(e, d, b);
+        cleaned = true;
+      }
+    }
+    if (!cleaned) break;
+  }
+
   // ---- Final verification of every hard rule. ----
   for (let d = 0; d < DAYS; d++) {
     for (let b = 0; b < BLOCKS; b++) if (slotCount(d, b) < FLOOR) return null;
@@ -288,7 +394,7 @@ function score(cfg: Config, bnd: Bounds[], sol: Solution): number {
   const n = cfg.staff.length;
   const w = cfg.weights;
   const we = new Set(cfg.weekendDays);
-  let hoursDev = 0, fragments = 0;
+  let hoursDev = 0, fragments = 0, crowding = 0;
   const nightCounts: number[] = [];
   const weekend = new Array(n).fill(0);
   const cN = cfg.carryNights || new Array(n).fill(0);
@@ -301,19 +407,28 @@ function score(cfg: Config, bnd: Bounds[], sol: Solution): number {
       const day = sol.assign[e][d];
       let run = 0;
       for (let b = 0; b < 3; b++) if (day[b]) run++;
-      if (run > 0) fragments += Math.max(0, cfg.staff[e].maxStretchBlocks - run);
+      if (run === 1) fragments += 3;        // a lone 4-hour piece is a last resort
+      else if (run === 2) fragments += 1;   // 8 hours is fine, 12 is best
       if (day[3]) nightsWorked++;
       if (we.has(d) && (run > 0 || day[3])) weekend[e]++;
     }
     weekend[e] += cW[e];
     if (cfg.staff[e].side !== "day") nightCounts.push(nightsWorked + cN[e]);
   }
+  for (let d = 0; d < DAYS; d++) {
+    let chips = 0;
+    for (let e = 0; e < n; e++) {
+      if (sol.assign[e][d][0] || sol.assign[e][d][1] || sol.assign[e][d][2]) chips++;
+    }
+    crowding += Math.max(0, chips - 2) + 3 * Math.max(0, chips - 3) + 10 * Math.max(0, chips - 4);
+  }
   const spread = (arr: number[]) => arr.length ? Math.max(...arr) - Math.min(...arr) : 0;
   return (
-    w.hours * hoursDev +
-    w.night * spread(nightCounts) +
-    w.weekend * spread(weekend) +
-    w.fragment * fragments
+    (w.hours ?? 100) * hoursDev +
+    (w.night ?? 0) * spread(nightCounts) +
+    (w.weekend ?? 0) * spread(weekend) +
+    (w.fragment ?? 0) * fragments +
+    (w.crowd ?? 0) * crowding
   );
 }
 

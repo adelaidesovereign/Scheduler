@@ -23,6 +23,7 @@ export interface Weights {
   night: number;
   weekend: number;
   fragment: number;
+  crowd: number; // keeping day shifts lean, fewest people that the hours allow
 }
 
 export interface Config {

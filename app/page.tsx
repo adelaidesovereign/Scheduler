@@ -221,7 +221,7 @@ export default function Page() {
       const cfg: Config = {
         staff: cleanStaff,
         blockOff: [...requestsToBlocks(allReqs, ws), ...extraOff],
-        weights: { hours: 100, night: 8, weekend: 6, fragment: 3 },
+        weights: { hours: 100, night: 8, weekend: 6, fragment: 8, crowd: 20 },
         weekendDays: wd,
         carryNights: [...carryNights],
         carryWeekends: [...carryWeekends],
