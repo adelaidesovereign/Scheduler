@@ -410,14 +410,21 @@ function dayPresence(day: boolean[]): string | null {
 function WeekBand({ weekStart, cfg, sol, colorIndex }: {
   weekStart: string; cfg: Config; sol: { assign: boolean[][][]; blocksOf: number[] }; colorIndex: Record<string, number>;
 }) {
-  const grid: { id: string; when: string }[][][] = [];
+  const grid: { id: string; when: string; start: number; len: number }[][][] = [];
   for (let d = 0; d < DAYS; d++) {
     grid[d] = [[], []];
     for (let e = 0; e < cfg.staff.length; e++) {
       const p = dayPresence(sol.assign[e][d]);
-      if (p) grid[d][0].push({ id: cfg.staff[e].id, when: p });
-      if (sol.assign[e][d][3]) grid[d][1].push({ id: cfg.staff[e].id, when: "8p–8a" });
+      if (p) {
+        let first = 3, len = 0;
+        for (let b = 0; b < 3; b++) if (sol.assign[e][d][b]) { first = Math.min(first, b); len++; }
+        grid[d][0].push({ id: cfg.staff[e].id, when: p, start: first, len });
+      }
+      if (sol.assign[e][d][3]) grid[d][1].push({ id: cfg.staff[e].id, when: "8p–8a", start: 0, len: 3 });
     }
+    // Earliest start first; among same starts, the longer shift leads.
+    grid[d][0].sort((a, b) => a.start - b.start || b.len - a.len || a.id.localeCompare(b.id));
+    grid[d][1].sort((a, b) => a.id.localeCompare(b.id));
   }
   const chip = (p: { id: string; when: string }, k: number) => (
     <span className="chip" key={k} style={{ background: colorFor(colorIndex[p.id] ?? 0) }}>

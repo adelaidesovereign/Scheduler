@@ -151,7 +151,43 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
     }
   }
 
-  // ---- Phase 2: days. Every day block needs two on, one of them an anchor. ----
+  // ---- Phase 2a: the backbone. Each day starts as two full 8a-8p people
+  // wherever the roster allows, so days are built from long shifts, not patchwork. ----
+  const canFullDay = (e: number, d: number): boolean => {
+    const st = cfg.staff[e];
+    if (st.side === "night" || st.maxStretchBlocks < 3) return false;
+    if (dayRun(e, d).length > 0) return false;
+    if (blocksOf[e] + 3 > bnd[e].maxBlocks) return false;
+    if (onNight(e, d) || onNight(e, d - 1)) return false;
+    for (let b = 0; b < 3; b++) if (blocked(e, d, b) || slotCount(d, b) >= MAX_PER_BLOCK) return false;
+    return true;
+  };
+  for (let d = 0; d < DAYS; d++) {
+    for (let spot = 0; spot < FLOOR; spot++) {
+      const needAnchor = !anchorOn(d, 0) && !anchorOn(d, 1) && !anchorOn(d, 2);
+      const pool: number[] = [];
+      for (let e = 0; e < n; e++) {
+        if (!canFullDay(e, d)) continue;
+        if (needAnchor && spot === 0 && !cfg.staff[e].anchor) continue;
+        pool.push(e);
+      }
+      if (pool.length === 0) break;
+      pool.sort((a, z) => {
+        const da = blocksOf[a] - bnd[a].minBlocks;
+        const dz = blocksOf[z] - bnd[z].minBlocks;
+        if (da !== dz) return da - dz;
+        const aa = cfg.staff[a].anchor ? 0 : 1;
+        const az = cfg.staff[z].anchor ? 0 : 1;
+        if (aa !== az) return aa - az;
+        return rand() - 0.5;
+      });
+      const pick = pool.length > 1 && rand() < 0.35 ? 1 : 0;
+      const chosen = pool[Math.min(pick, pool.length - 1)];
+      for (let b = 0; b < 3; b++) placeDay(chosen, d, b);
+    }
+  }
+
+  // ---- Phase 2b: fill whatever the backbone could not cover. ----
   for (let d = 0; d < DAYS; d++) {
     for (let b = 0; b < 3; b++) {
       while (slotCount(d, b) < FLOOR || !anchorOn(d, b)) {
@@ -181,12 +217,18 @@ function solveOnce(cfg: Config, bnd: Bounds[], rand: () => number): Solution | n
         const wasFresh = dayRun(chosen, d).length === 0;
         placeDay(chosen, d, b);
         if (wasFresh) {
-          // Ride the same person forward into the day's remaining need,
-          // building one real stretch instead of stranding a 4-hour piece.
+          // Ride the same person forward into the day's remaining need.
           for (let nb = b + 1; nb < 3; nb++) {
             if (slotCount(d, nb) >= FLOOR) break;
             if (!canDayBlock(chosen, d, nb)) break;
             placeDay(chosen, d, nb);
+          }
+          // If that still left a lone 4-hour piece, widen it into a real
+          // shift toward whichever side is quieter, even slightly overstaffed.
+          if (dayRun(chosen, d).length === 1) {
+            const sides = [b - 1, b + 1].filter((x) => x >= 0 && x <= 2 && canDayBlock(chosen, d, x));
+            sides.sort((x, y) => slotCount(d, x) - slotCount(d, y));
+            if (sides.length > 0) placeDay(chosen, d, sides[0]);
           }
         }
         if (slotCount(d, b) >= FLOOR && anchorOn(d, b)) break;
