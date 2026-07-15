@@ -19,7 +19,12 @@ interface RosterRow {
   id: string; name: string; pin: string; notes: string;
   side: Side; empType: "FT" | "PT"; anchor: boolean; primary: boolean; stretch: "8" | "12";
   pref: string; min: string; max: string;
+  avail: boolean[][]; // [weekday Sun..Sat][slot: 8a-12p, 12p-4p, 4p-8p, night]
 }
+
+const fullAvail = (): boolean[][] => Array.from({ length: 7 }, () => [true, true, true, true]);
+const AVAIL_SLOTS = ["8a–12p", "12p–4p", "4p–8p", "Night"];
+const DOW_SHORT = ["S", "M", "T", "W", "T", "F", "S"];
 interface AdminRequest {
   key: string; id: string; date: string;
   kind: "all" | "day" | "night" | "custom"; from: string; to: string;
@@ -29,16 +34,16 @@ interface LoggedWeek { weekStart: string; hours: Record<string, number>; names: 
 interface WeekResult { weekStart: string; cfg: Config; result: ReturnType<typeof solve>; }
 
 const DEFAULT_ROSTER: RosterRow[] = [
-  { id: "AT", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "36", min: "36", max: "48" },
-  { id: "CT", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "36", min: "36", max: "48" },
-  { id: "CM", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: false, stretch: "12", pref: "32", min: "24", max: "40" },
-  { id: "AD", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "32", min: "24", max: "40" },
-  { id: "KH", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "24", min: "16", max: "32" },
-  { id: "WR", name: "", pin: "1111", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48" },
-  { id: "EH", name: "", pin: "1111", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48" },
-  { id: "SL", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36" },
-  { id: "VT", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36" },
-  { id: "YN", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36" },
+  { id: "AT", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
+  { id: "CT", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: true, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
+  { id: "CM", name: "", pin: "1111", notes: "", side: "day", empType: "FT", anchor: true, primary: false, stretch: "12", pref: "32", min: "24", max: "40", avail: fullAvail() },
+  { id: "AD", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "32", min: "24", max: "40", avail: fullAvail() },
+  { id: "KH", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "24", min: "16", max: "32", avail: fullAvail() },
+  { id: "WR", name: "", pin: "1111", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
+  { id: "EH", name: "", pin: "1111", notes: "", side: "night", empType: "FT", anchor: false, primary: false, stretch: "12", pref: "36", min: "36", max: "48", avail: fullAvail() },
+  { id: "SL", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36", avail: fullAvail() },
+  { id: "VT", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36", avail: fullAvail() },
+  { id: "YN", name: "", pin: "1111", notes: "", side: "night", empType: "PT", anchor: false, primary: false, stretch: "12", pref: "24", min: "12", max: "36", avail: fullAvail() },
 ];
 
 // Rules for known initials, used when migrating an older saved roster.
@@ -107,6 +112,22 @@ function requestsToBlocks(reqs: AdminRequest[], weekStart: string): BlockOff[] {
   return out;
 }
 
+// Standing weekly availability becomes hard holds for whichever week is built.
+function availabilityToBlocks(rows: RosterRow[], weekStart: string): BlockOff[] {
+  const out: BlockOff[] = [];
+  const startDow = dowOf(weekStart);
+  for (const r of rows) {
+    if (!r.avail) continue;
+    for (let i = 0; i < DAYS; i++) {
+      const dow = (startDow + i) % 7;
+      const a = r.avail[dow] || [true, true, true, true];
+      for (let b = 0; b < 3; b++) if (!a[b]) out.push({ id: r.id.trim().toUpperCase(), day: i, block: b });
+      if (!a[3]) for (const b of [3, 4, 5]) out.push({ id: r.id.trim().toUpperCase(), day: i, block: b });
+    }
+  }
+  return out;
+}
+
 function rowsToStaff(rows: RosterRow[]): Staff[] {
   return rows.map((r) => ({
     id: r.id.trim().toUpperCase() || "??",
@@ -143,6 +164,7 @@ export default function Page() {
             side: (x.side as Side) || "day", empType: x.empType === "FT" ? "FT" : "PT",
             anchor: Boolean(x.anchor), primary: Boolean(x.primary), stretch: x.stretch === "12" ? "12" : "8",
             pref: x.pref || "24", min: x.min || "12", max: x.max || "36",
+            avail: Array.isArray(x.avail) && x.avail.length === 7 ? x.avail : fullAvail(),
           })));
         }
       } else {
@@ -158,6 +180,7 @@ export default function Page() {
                 side: (k.side as Side) || "day", empType: k.empType || "PT",
                 anchor: k.anchor ?? false, primary: k.primary ?? false, stretch: k.stretch || "8",
                 pref: x.pref || "24", min: x.min || "12", max: x.max || "36",
+                avail: fullAvail(),
               };
             }));
           }
@@ -192,7 +215,7 @@ export default function Page() {
   }
   function removeStaff(i: number) { setStaff((s) => s.filter((_, k) => k !== i)); }
   function addStaff() {
-    setStaff((s) => [...s, { id: "NEW", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "24", min: "12", max: "36" }]);
+    setStaff((s) => [...s, { id: "NEW", name: "", pin: "1111", notes: "", side: "day", empType: "PT", anchor: false, primary: false, stretch: "8", pref: "24", min: "12", max: "36", avail: fullAvail() }]);
   }
   function addAdminReq() {
     setAdminReqs((t) => [...t, {
@@ -220,7 +243,7 @@ export default function Page() {
       for (let i = 0; i < DAYS; i++) { const dw = dowOf(addDaysISO(ws, i)); if (dw === 0 || dw === 6) wd.push(i); }
       const cfg: Config = {
         staff: cleanStaff,
-        blockOff: [...requestsToBlocks(allReqs, ws), ...extraOff],
+        blockOff: [...requestsToBlocks(allReqs, ws), ...availabilityToBlocks(staff, ws), ...extraOff],
         weights: { hours: 100, night: 8, weekend: 6, fragment: 8, crowd: 20 },
         weekendDays: wd,
         carryNights: [...carryNights],
@@ -593,6 +616,31 @@ function StaffView({
               <div className="field"><label>Max h</label>
                 <input type="text" inputMode="numeric" value={row.max} onFocus={selectAll}
                   onChange={(e) => onUpdate(i, { max: e.target.value.replace(/[^0-9]/g, "") })} /></div>
+            </div>
+            <div className="availwrap">
+              <label className="availlabel">Weekly availability · tap to block a time</label>
+              <table className="availgrid"><thead><tr><th></th>
+                {DOW_SHORT.map((d, k) => <th key={k}>{d}</th>)}
+              </tr></thead><tbody>
+                {AVAIL_SLOTS.map((slot, si) => (
+                  <tr key={si}>
+                    <td className="availslot">{slot}</td>
+                    {Array.from({ length: 7 }).map((_, dw) => {
+                      const on = row.avail?.[dw]?.[si] ?? true;
+                      return (
+                        <td key={dw}>
+                          <button className={"availcell" + (on ? " on" : "")}
+                            onClick={() => {
+                              const next = (row.avail && row.avail.length === 7 ? row.avail : fullAvail()).map((day) => [...day]);
+                              next[dw][si] = !next[dw][si];
+                              onUpdate(i, { avail: next });
+                            }}>{on ? "✓" : "×"}</button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody></table>
             </div>
             <div className="field"><label>Notes / requirements</label>
               <input type="text" value={row.notes} placeholder="anything to remember about this person"
