@@ -11,7 +11,7 @@ const PALETTE = [
 const colorFor = (i: number) => PALETTE[i % PALETTE.length];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const OT_THRESHOLD = 40;
-const APP_VERSION = "v9";
+const APP_VERSION = "v10";
 const ROSTER_KEY = "sa_roster_v3";
 const LOG_KEY = "sa_hourslog_v1";
 const ADMIN_KEY = "sa_admin_v1";
@@ -259,7 +259,7 @@ export default function Page() {
       const cfg: Config = {
         staff: cleanStaff,
         blockOff: [...requestsToBlocks(allReqs, ws), ...availabilityToBlocks(staff, ws), ...extraOff],
-        weights: { hours: 100, night: 8, weekend: 6, fragment: 16, crowd: 30 },
+        weights: { hours: 100, night: 8, weekend: 6, fragment: 12, crowd: 60 },
         weekendDays: wd,
         dayLabels: Array.from({ length: DAYS }, (_, i) => prettyDate(addDaysISO(ws, i))),
         carryNights: [...carryNights],
@@ -331,7 +331,7 @@ export default function Page() {
         <div className="meta">
           <span className="big">{mode === "week" ? weekLabel(weekStart) : monthPick}</span>
           <br />
-          at least two on, around the clock · nights always 8p to 8a · {APP_VERSION}
+          two on the clock, around the clock · nights always 8p to 8a · {APP_VERSION}
         </div>
       </div>
       <div className="tabs">
