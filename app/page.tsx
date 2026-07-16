@@ -11,7 +11,7 @@ const PALETTE = [
 const colorFor = (i: number) => PALETTE[i % PALETTE.length];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const OT_THRESHOLD = 40;
-const APP_VERSION = "v12";
+const APP_VERSION = "v13";
 const ROSTER_KEY = "sa_roster_v3";
 const LOG_KEY = "sa_hourslog_v1";
 const ADMIN_KEY = "sa_admin_v1";
@@ -27,7 +27,7 @@ const fullAvail = (): boolean[][] => Array.from({ length: 7 }, () => [true, true
 const AVAIL_SLOTS = ["8a–12p", "12p–4p", "4p–8p", "Night"];
 const DOW_SHORT = ["S", "M", "T", "W", "T", "F", "S"];
 interface AdminRequest {
-  key: string; id: string; date: string;
+  key: string; id: string; date: string; dateTo: string;
   kind: "all" | "day" | "night" | "custom"; from: string; to: string;
   source: "admin" | "portal";
 }
@@ -84,6 +84,13 @@ function fmtClock(t: string): string {
   h = h % 12; if (h === 0) h = 12;
   return ms === "00" ? `${h}${suf}` : `${h}:${ms}${suf}`;
 }
+function sundayOf(iso: string): string {
+  return addDaysISO(iso, -dowOf(iso));
+}
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function diffDays(a: string, b: string): number {
   return Math.round((new Date(a + "T00:00:00").getTime() - new Date(b + "T00:00:00").getTime()) / 86400000);
 }
@@ -105,16 +112,25 @@ function requestsToBlocks(reqs: AdminRequest[], weekStart: string): BlockOff[] {
     if (ov(f, t, 0, 4)) push(id, di - 1, 4);
     if (ov(f, t, 4, 8)) push(id, di - 1, 5);
   };
-  for (const r of reqs) {
-    const di = diffDays(r.date, weekStart);
-    if (di < -1 || di > DAYS) continue;
-    if (r.kind === "all") { for (let b = 0; b < BLOCKS; b++) push(r.id, di, b); continue; }
-    if (r.kind === "day") { push(r.id, di, 0); push(r.id, di, 1); push(r.id, di, 2); continue; }
-    if (r.kind === "night") { push(r.id, di, 3); push(r.id, di, 4); push(r.id, di, 5); continue; }
+  const applyOne = (r: AdminRequest, date: string) => {
+    const di = diffDays(date, weekStart);
+    if (di < -1 || di > DAYS) return;
+    if (r.kind === "all") { for (let b = 0; b < BLOCKS; b++) push(r.id, di, b); return; }
+    if (r.kind === "day") { push(r.id, di, 0); push(r.id, di, 1); push(r.id, di, 2); return; }
+    if (r.kind === "night") { push(r.id, di, 3); push(r.id, di, 4); push(r.id, di, 5); return; }
     const f = parseInt(r.from.split(":")[0], 10) + parseInt(r.from.split(":")[1], 10) / 60;
     const t = parseInt(r.to.split(":")[0], 10) + parseInt(r.to.split(":")[1], 10) / 60;
-    if (t > f) { mapWindow(r.id, r.date, f, t); }
-    else { mapWindow(r.id, r.date, f, 24); mapWindow(r.id, addDaysISO(r.date, 1), 0, t); }
+    if (t > f) { mapWindow(r.id, date, f, t); }
+    else { mapWindow(r.id, date, f, 24); mapWindow(r.id, addDaysISO(date, 1), 0, t); }
+  };
+  for (const r of reqs) {
+    const last = r.dateTo && r.dateTo >= r.date ? r.dateTo : r.date;
+    let cur = r.date, guard = 0;
+    while (cur <= last && guard < 92) {
+      applyOne(r, cur);
+      cur = addDaysISO(cur, 1);
+      guard++;
+    }
   }
   return out;
 }
@@ -150,7 +166,7 @@ function rowsToStaff(rows: RosterRow[]): Staff[] {
 export default function Page() {
   const [tab, setTab] = useState<"build" | "staff" | "ledger">("build");
   const [mode, setMode] = useState<"week" | "month">("week");
-  const [weekStart, setWeekStart] = useState("2026-07-17");
+  const [weekStart, setWeekStart] = useState(() => sundayOf(todayISO()));
   const [monthPick, setMonthPick] = useState("2026-08");
   const [staff, setStaff] = useState<RosterRow[]>(DEFAULT_ROSTER);
   const [adminReqs, setAdminReqs] = useState<AdminRequest[]>([]);
@@ -209,7 +225,10 @@ export default function Page() {
       const l = localStorage.getItem(LOG_KEY);
       if (l) { const p = JSON.parse(l); if (Array.isArray(p)) setLog(p); }
       const q = localStorage.getItem("sa_reqs_v1");
-      if (q) { const pr = JSON.parse(q); if (Array.isArray(pr)) setAdminReqs(pr); }
+      if (q) {
+        const pr = JSON.parse(q);
+        if (Array.isArray(pr)) setAdminReqs(pr.map((r: AdminRequest) => ({ ...r, dateTo: r.dateTo || r.date })));
+      }
     } catch {}
     setLoaded(true);
   }, []);
@@ -220,14 +239,13 @@ export default function Page() {
   // The date range being scheduled.
   const range = useMemo(() => {
     if (mode === "week") return { from: weekStart, weeks: [weekStart] };
-    const first = monthPick + "-01";
-    const weeks: string[] = [];
-    let cur = first;
     const [y, m] = monthPick.split("-").map(Number);
     const lastDay = new Date(y, m, 0).getDate();
     const monthEnd = `${monthPick}-${String(lastDay).padStart(2, "0")}`;
+    const weeks: string[] = [];
+    let cur = sundayOf(monthPick + "-01");
     while (cur <= monthEnd) { weeks.push(cur); cur = addDaysISO(cur, 7); }
-    return { from: first, weeks };
+    return { from: weeks[0], weeks };
   }, [mode, weekStart, monthPick]);
 
   function updateStaff(i: number, patch: Partial<RosterRow>) {
@@ -240,7 +258,7 @@ export default function Page() {
   function addAdminReq() {
     setAdminReqs((t) => [...t, {
       key: "a" + Date.now() + Math.floor(Math.random() * 1e6),
-      id: staff[0]?.id || "", date: range.weeks[0], kind: "all", from: "08:00", to: "12:00", source: "admin",
+      id: staff[0]?.id || "", date: range.weeks[0], dateTo: range.weeks[0], kind: "all", from: "08:00", to: "12:00", source: "admin",
     }]);
   }
   function updateAdminReq(k: string, patch: Partial<AdminRequest>) {
@@ -361,8 +379,8 @@ export default function Page() {
               <button className={mode === "month" ? "on" : ""} onClick={() => setMode("month")}>Whole month</button>
             </div>
             {mode === "week" ? (
-              <div className="field"><label>Week starts</label>
-                <input type="date" value={weekStart} onChange={(e) => setWeekStart(e.target.value)} /></div>
+              <div className="field"><label>Week of (snaps to Sunday)</label>
+                <input type="date" value={weekStart} onChange={(e) => e.target.value && setWeekStart(sundayOf(e.target.value))} /></div>
             ) : (
               <div className="field"><label>Month</label>
                 <input type="month" value={monthPick} onChange={(e) => setMonthPick(e.target.value)} /></div>
@@ -378,7 +396,6 @@ export default function Page() {
                   <select value={r.id} onChange={(e) => updateAdminReq(r.key, { id: e.target.value })}>
                     {staff.map((s, k) => <option key={k} value={s.id}>{s.id}</option>)}
                   </select>
-                  <input type="date" value={r.date} onChange={(e) => updateAdminReq(r.key, { date: e.target.value })} />
                   <select value={r.kind} onChange={(e) => updateAdminReq(r.key, { kind: e.target.value as AdminRequest["kind"] })}>
                     <option value="all">all day</option>
                     <option value="day">day shift</option>
@@ -386,6 +403,13 @@ export default function Page() {
                     <option value="custom">custom hours</option>
                   </select>
                   <button className="rowdrop" onClick={() => removeAdminReq(r.key)}>×</button>
+                </div>
+                <div className="reqdates">
+                  <input type="date" value={r.date}
+                    onChange={(e) => updateAdminReq(r.key, { date: e.target.value, dateTo: r.dateTo < e.target.value ? e.target.value : r.dateTo })} />
+                  <span>to</span>
+                  <input type="date" value={r.dateTo}
+                    onChange={(e) => updateAdminReq(r.key, { dateTo: e.target.value >= r.date ? e.target.value : r.date })} />
                 </div>
                 {r.kind === "custom" && (
                   <div className="reqtimes">

@@ -467,3 +467,9 @@ td.timeslot { padding: 0; height: auto; vertical-align: top; }
 .tradeoffs { border: 1px solid #c9a227; background: #faf3dc; padding: 12px 14px; margin-bottom: 16px; border-radius: 2px; }
 .tradeoffstitle { font-family: var(--font-mono); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: #7a6212; margin-bottom: 6px; }
 .tradeoff { font-size: 12.5px; color: #6b5710; padding: 3px 0; }
+
+/* Request rows: person and kind, then a from-to date range */
+.reqgrid { grid-template-columns: 72px 1fr 26px; }
+.reqdates { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; margin-top: 6px; }
+.reqdates span { font-size: 10px; color: var(--ink-soft); }
+.reqdates input { padding: 8px 6px; font-size: 12px; }
